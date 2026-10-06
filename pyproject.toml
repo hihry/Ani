@@ -1,0 +1,39 @@
+[project]
+name = "manhwa2anime"
+version = "0.1.0"
+description = "Manhwa-to-Anime AI pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "fastapi",
+    "uvicorn",
+    "redis",
+    "pillow",
+    "opencv-python-headless",
+    "numpy",
+    "torch",
+    "ffmpeg-python",
+    "pyyaml",
+    "httpx",
+    "rich",
+    "typer"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+ui = ["streamlit"]
+comfyui = ["comfyui-api"]
+
+[project.scripts]
+m2a = "m2a.cli:app"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true

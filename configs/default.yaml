@@ -1,0 +1,35 @@
+general:
+  run_dir: "runs/"
+  log_level: "INFO"
+
+perception:
+  detector: "magiv3"
+  fallback: "opencv"
+
+understanding:
+  vlm: "qwen3-vl-8b"
+  schema_version: 1
+
+cleanup:
+  inpainter: "lama"
+
+generation:
+  primary_model: "wan22-ti2v-5b"
+  fallback_models: ["hunyuan15", "ltx23"]
+  max_retries: 2
+  max_clip_duration_s: 5.0
+
+audio:
+  tts_primary: "chatterbox"
+  tts_fallback: "kokoro"
+
+composition:
+  output_format: "mp4"
+  resolution: [720, 1280]
+  fps: 24
+  transition_type: "crossfade"
+
+qc:
+  identity_threshold: 0.85
+  flicker_threshold: 0.15
+  max_new_text_lines: 0

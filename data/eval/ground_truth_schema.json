@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GroundTruthSchema",
+  "type": "object",
+  "properties": {
+    "page_id": {
+      "type": "string",
+      "description": "Identifier for the manhwa page."
+    },
+    "panels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "panel_id": {
+            "type": "string"
+          },
+          "bbox": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[x_min, y_min, x_max, y_max]"
+          },
+          "text_balloons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bbox": {
+                  "type": "array",
+                  "items": { "type": "number" }
+                },
+                "text": { "type": "string" },
+                "speaker_id": { "type": "string" }
+              },
+              "required": ["bbox", "text"]
+            }
+          }
+        },
+        "required": ["panel_id", "bbox"]
+      }
+    }
+  },
+  "required": ["page_id", "panels"]
+}

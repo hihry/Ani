@@ -1,0 +1,5 @@
+generation:
+  primary_model: "wan22-i2v-a14b"
+
+understanding:
+  vlm: "qwen3-vl-8b"

@@ -1,0 +1,5 @@
+generation:
+  primary_model: "wan22-ti2v-5b"
+
+understanding:
+  vlm: "qwen3-vl-8b-4bit"

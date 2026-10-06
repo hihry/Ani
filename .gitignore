@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+
+# ML/DL files
+runs/
+*.pt
+*.safetensors
+*.ckpt
+models/
+
+# Data evaluation
+data/eval/*.png
+data/eval/*.jpg
+
+# IDE / Editor
+.vscode/
+.idea/

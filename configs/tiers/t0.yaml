@@ -1,0 +1,6 @@
+generation:
+  primary_model: "kenburns"
+  fallback_models: []
+
+understanding:
+  vlm: "qwen3-vl-2b"

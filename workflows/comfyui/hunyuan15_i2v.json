@@ -1,0 +1,36 @@
+{
+  "description": "TODO: Implement full HunyuanVideo 1.5 Image-to-Video workflow structure",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "inputs": {
+        "image": "panel.png"
+      }
+    },
+    {
+      "id": 2,
+      "type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "hunyuan15_model.safetensors"
+      }
+    },
+    {
+      "id": 3,
+      "type": "HunyuanImageToVideo",
+      "inputs": {
+        "prompt": "anime style, motion, high quality",
+        "image": ["1", 0],
+        "model": ["2", 0]
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "inputs": {
+        "video": ["3", 0],
+        "filename_prefix": "hunyuan15_output"
+      }
+    }
+  ]
+}
