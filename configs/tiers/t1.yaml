@@ -1,5 +1,9 @@
+# T1: 12-16 GB GPU (e.g., RTX 4070, 3080)
 generation:
   primary_model: "wan22-ti2v-5b"
+  fallback_models:
+    - "kenburns"
+  max_retries: 2
 
 understanding:
   vlm: "qwen3-vl-8b-4bit"

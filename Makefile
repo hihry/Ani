@@ -1,27 +1,28 @@
-.PHONY: install dev lint test format run serve ui
+.PHONY: build run test lint clean worker worker-install inspect
 
-install:
-	pip install -e .
+# === Go Backend ===
+build:
+	go build -o m2a.exe ./cmd/m2a/
 
-dev:
-	pip install -e .[dev,ui]
-
-lint:
-	ruff check .
-	mypy .
-
-format:
-	ruff format .
-	ruff check --fix .
+run: build
+	./m2a.exe run --pages sample.png --tier t1
 
 test:
-	pytest
+	go test ./... -v
 
-run:
-	m2a
+lint:
+	go vet ./...
 
-serve:
-	uvicorn m2a.api:app --reload
+# === Python Worker ===
+worker-install:
+	cd workers && pip install -r requirements.txt
 
-ui:
-	streamlit run m2a/ui.py
+worker:
+	python -m uvicorn workers.server:app --host 127.0.0.1 --port 8100 --reload
+
+# === Maintenance ===
+clean:
+	rm -rf m2a.exe runs/
+
+inspect:
+	./m2a.exe inspect --run-dir $(RUN_DIR)

@@ -1,6 +1,13 @@
+# T0: CPU-only tier — no GPU available
+# Uses Ken Burns only, smallest VLM, no video generation
 generation:
-  primary_model: "kenburns"
+  primary_model: "kenburns"   # No AI video, only pan/zoom
   fallback_models: []
+  max_retries: 0
 
 understanding:
   vlm: "qwen3-vl-2b"
+
+audio:
+  tts_primary: "kokoro"      # CPU-friendly
+  tts_fallback: "edge-tts"
