@@ -1,77 +1,201 @@
-"""FastAPI application for pipeline job management."""
+"""FastAPI application for pipeline job management and human checkpoint editing."""
+from __future__ import annotations
+
 import logging
+import re
+from pathlib import Path
+from typing import Any, Dict, List
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import uuid
-from typing import Dict
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from m2a.config import load_config
+from m2a.graph import PipelineGraph
+from m2a.state import PanelJSON, PipelineStage, RunConfig, RunState
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Manhwa-to-Anime API")
+app = FastAPI(title="Manhwa-to-Anime Job API", version="0.2.0")
 
-# TODO: Implement actual Redis queue integration
-# redis_client = Redis()
-JOB_QUEUE: Dict[str, dict] = {}
+RUNS_DIR = Path("./runs")
+JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+STAGE_PROGRESS = {
+    PipelineStage.INGEST: 0.08,
+    PipelineStage.SEGMENT: 0.18,
+    PipelineStage.UNDERSTAND: 0.30,
+    PipelineStage.CHECKPOINT_1: 0.35,
+    PipelineStage.CLEAN_PLATES: 0.46,
+    PipelineStage.ROUTE: 0.54,
+    PipelineStage.TTS: 0.62,
+    PipelineStage.CHECKPOINT_2: 0.66,
+    PipelineStage.GENERATE: 0.80,
+    PipelineStage.QC: 0.90,
+    PipelineStage.ASSEMBLE: 0.97,
+    PipelineStage.DONE: 1.00,
+    PipelineStage.FAILED: 0.00,
+}
+
+
+def _safe_run_dir(job_id: str) -> Path:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
+    return RUNS_DIR.resolve() / job_id
+
 
 class JobSubmitRequest(BaseModel):
-    config: dict
-    compute_tier: str = "standard"
+    source_pages: List[str] = Field(default_factory=list)
+    source_language: str = "ko"
+    compute_tier: str = "t1"
+    auto_approve: bool = False
+    config: Dict[str, Any] = Field(default_factory=dict)
+
 
 class JobStatusResponse(BaseModel):
     job_id: str
     status: str
+    current_stage: str
     progress: float
+    panels_count: int = 0
+    errors: List[str] = Field(default_factory=list)
+
+
+class CheckpointUpdateRequest(BaseModel):
+    panels: List[PanelJSON]
+    resume_after_save: bool = True
+
 
 @app.post("/jobs", response_model=JobStatusResponse)
-async def submit_job(request: JobSubmitRequest):
-    """Submits a new pipeline job."""
-    job_id = str(uuid.uuid4())
-    logger.info(f"Submitting job {job_id}")
-    
-    # TODO: Push to Redis queue
-    job_data = {
-        "id": job_id,
-        "status": "queued",
-        "progress": 0.0,
-        "config": request.config,
-    }
-    JOB_QUEUE[job_id] = job_data
-    
-    return JobStatusResponse(job_id=job_id, status="queued", progress=0.0)
+def submit_job(request: JobSubmitRequest) -> JobStatusResponse:
+    """Submits and starts a pipeline job backed by runs/<job_id>/state.json."""
+    tier = request.compute_tier if request.compute_tier in ("t0", "t1", "t2") else "t1"
+    lang = request.source_language if request.source_language in ("ko", "ja", "en") else "ko"
+    cfg = load_config(tier=tier, overrides=request.config or None)
 
-@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str):
-    """Gets job status and progress."""
-    if job_id not in JOB_QUEUE:
-        raise HTTPException(status_code=404, detail="Job not found")
-        
-    # TODO: Fetch from Redis
-    job_data = JOB_QUEUE[job_id]
+    run_cfg = RunConfig(
+        config_hash="job_api_run",
+        source_pages=request.source_pages,
+        source_language=lang,
+        output_resolution=cfg.resolution,
+        compute_tier=tier,
+    )
+    job_id = run_cfg.run_id
+    run_dir = _safe_run_dir(job_id)
+    state = RunState(config=run_cfg, current_stage=PipelineStage.INGEST)
+    state.save(run_dir)
+
+    if request.source_pages:
+        graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=request.auto_approve)
+        state = graph.run(state)
+
+    prog = STAGE_PROGRESS.get(state.current_stage, 0.0)
     return JobStatusResponse(
-        job_id=job_id, 
-        status=job_data["status"], 
-        progress=job_data["progress"]
+        job_id=job_id,
+        status=state.current_stage.value.lower(),
+        current_stage=state.current_stage.value,
+        progress=prog,
+        panels_count=len(state.panels),
+        errors=state.errors,
     )
 
-@app.get("/jobs/{job_id}/result")
-async def get_job_result(job_id: str):
-    """Downloads result MP4."""
-    if job_id not in JOB_QUEUE:
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str) -> JobStatusResponse:
+    """Gets job status and progress directly from runs/<job_id>/state.json."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
         raise HTTPException(status_code=404, detail="Job not found")
-        
-    # TODO: Return FileResponse for the generated video
-    return {"message": f"Result for {job_id} not implemented yet"}
+
+    state = RunState.load(run_dir)
+    prog = STAGE_PROGRESS.get(state.current_stage, 0.0)
+    return JobStatusResponse(
+        job_id=job_id,
+        status=state.current_stage.value.lower(),
+        current_stage=state.current_stage.value,
+        progress=prog,
+        panels_count=len(state.panels),
+        errors=state.errors,
+    )
+
+
+@app.get("/jobs/{job_id}/state")
+def get_job_state(job_id: str) -> Dict[str, Any]:
+    """Returns full RunState JSON for UI inspection and CP1/CP2 editing."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    state = RunState.load(run_dir)
+    return state.model_dump()
+
+
+@app.put("/jobs/{job_id}/checkpoint", response_model=JobStatusResponse)
+def update_checkpoint(job_id: str, req: CheckpointUpdateRequest) -> JobStatusResponse:
+    """Saves human edits at CP1 or CP2 and optionally resumes the pipeline."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    state = RunState.load(run_dir)
+    if state.current_stage not in (PipelineStage.CHECKPOINT_1, PipelineStage.CHECKPOINT_2):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Job is at stage {state.current_stage.value}, not at a human review checkpoint",
+        )
+
+    state.panels = req.panels
+    state.save(run_dir)
+
+    if req.resume_after_save:
+        cfg = load_config(tier=state.config.compute_tier)
+        graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=False)
+        state = graph.resume(state)
+
+    prog = STAGE_PROGRESS.get(state.current_stage, 0.0)
+    return JobStatusResponse(
+        job_id=job_id,
+        status=state.current_stage.value.lower(),
+        current_stage=state.current_stage.value,
+        progress=prog,
+        panels_count=len(state.panels),
+        errors=state.errors,
+    )
+
+
+@app.get("/jobs/{job_id}/result")
+def get_job_result(job_id: str):
+    """Downloads result MP4/WebP/AVI."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    for candidate in (
+        run_dir / "output" / "final_anime.mp4",
+        run_dir / "output" / "final_anime.avi",
+        run_dir / "output" / "final_anime.webp",
+        run_dir / "baseline.mp4",
+        run_dir / "baseline.avi",
+        run_dir / "baseline.webp",
+    ):
+        if candidate.exists():
+            return FileResponse(path=str(candidate), filename=candidate.name)
+
+    raise HTTPException(status_code=404, detail=f"No rendered video artifact found yet for job {job_id}")
+
 
 @app.delete("/jobs/{job_id}")
-async def cancel_job(job_id: str):
-    """Cancels a job."""
-    if job_id not in JOB_QUEUE:
+def cancel_job(job_id: str) -> Dict[str, str]:
+    """Marks a job as cancelled/failed."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
         raise HTTPException(status_code=404, detail="Job not found")
-        
-    # TODO: Remove from Redis queue and kill worker process if running
-    JOB_QUEUE[job_id]["status"] = "cancelled"
+
+    state = RunState.load(run_dir)
+    state.record_error("Job cancelled via API")
+    state.advance_to(PipelineStage.FAILED)
+    state.save(run_dir)
     return {"message": "Job cancelled"}
 
+
 @app.get("/health")
-async def health_check():
+def health_check() -> Dict[str, str]:
     """Health check endpoint."""
     return {"status": "ok"}

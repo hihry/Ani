@@ -1,5 +1,20 @@
 package model
 
+import (
+	"fmt"
+	"math"
+)
+
+const (
+	MinPanelDuration = 0.5
+	MaxPanelDuration = 10.0
+)
+
+// ClampDuration restricts a panel duration to the valid contract range [0.5, 10.0].
+func ClampDuration(d float64) float64 {
+	return math.Max(MinPanelDuration, math.Min(MaxPanelDuration, d))
+}
+
 // BBox represents a bounding box in pixel coordinates.
 type BBox struct {
 	X int `json:"x"`
@@ -85,4 +100,29 @@ func NewPanelJSON(id string, bbox BBox) PanelJSON {
 		Route:           RouteKenBurns,
 		DurationS:       4.0,
 	}
+}
+
+// Validate checks that a PanelJSON conforms to the shared Go/Python contract.
+func (p PanelJSON) Validate() error {
+	if p.DurationS < MinPanelDuration || p.DurationS > MaxPanelDuration {
+		return fmt.Errorf("panel %s: duration_s %.2f outside valid range [%.1f, %.1f]",
+			p.PanelID, p.DurationS, MinPanelDuration, MaxPanelDuration)
+	}
+	if p.MotionIntensity < 0.0 || p.MotionIntensity > 1.0 {
+		return fmt.Errorf("panel %s: motion_intensity %.2f outside valid range [0.0, 1.0]",
+			p.PanelID, p.MotionIntensity)
+	}
+	switch p.Route {
+	case RouteI2V, RouteParallax, RouteKenBurns, "":
+	default:
+		return fmt.Errorf("panel %s: unsupported route %q", p.PanelID, p.Route)
+	}
+	for _, d := range p.Dialogue {
+		switch d.Lang {
+		case "ko", "ja", "en", "":
+		default:
+			return fmt.Errorf("panel %s: unsupported dialogue lang %q", p.PanelID, d.Lang)
+		}
+	}
+	return nil
 }

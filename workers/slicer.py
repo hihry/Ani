@@ -1,135 +1,217 @@
 """Gutter slicing panel detector for vertical-scroll manhwa.
 
-Uses row and column variance analysis to detect gutters (whitespace/background bands),
-extracts panel bounding boxes, assigns reading order, and crops individual panels.
+Uses vectorized 2D row and column variance analysis to detect both horizontal and
+vertical gutters (whitespace/background bands), extracts exact panel bounding boxes
+without gutter bleed, assigns band-clustered reading order, and crops individual panels.
 """
 from pathlib import Path
-from typing import List, Dict, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 import numpy as np
 import logging
 
 logger = logging.getLogger("m2a.slicer")
 
-def is_gutter_row(row_pixels: np.ndarray, variance_thresh: float = 12.0, bg_bright_thresh: float = 240.0) -> bool:
-    """Checks if a horizontal row is a uniform gutter."""
-    # Std dev across width for each channel
-    std_val = float(np.std(row_pixels, axis=0).mean())
-    mean_val = float(np.mean(row_pixels))
-    # Row is gutter if low variance AND (high brightness or dark border)
-    if std_val < variance_thresh and (mean_val > bg_bright_thresh or mean_val < 25.0):
+
+def is_gutter_line(
+    line_pixels: np.ndarray,
+    variance_thresh: float = 12.0,
+    bg_bright_thresh: float = 240.0,
+    bg_dark_thresh: float = 10.0,
+) -> bool:
+    """Checks if a 1D line of RGB pixels (row or column) is a uniform gutter."""
+    std_val = float(np.std(line_pixels, axis=0).mean())
+    mean_val = float(np.mean(line_pixels))
+    if std_val < variance_thresh and (mean_val > bg_bright_thresh or mean_val < bg_dark_thresh):
         return True
     return False
+
+
+def is_gutter_row(
+    row_pixels: np.ndarray,
+    variance_thresh: float = 12.0,
+    bg_bright_thresh: float = 240.0,
+) -> bool:
+    """Checks if a horizontal row is a uniform gutter."""
+    return is_gutter_line(row_pixels, variance_thresh=variance_thresh, bg_bright_thresh=bg_bright_thresh)
+
+
+def _gutter_mask_1d(
+    arr: np.ndarray,
+    axis: int,
+    variance_thresh: float = 12.0,
+    bg_bright_thresh: float = 240.0,
+    bg_dark_thresh: float = 10.0,
+) -> np.ndarray:
+    """Vectorized gutter classification along axis (1 for rows, 0 for columns)."""
+    n = float(arr.shape[axis])
+    s1 = arr.sum(axis=axis, dtype=np.float64)
+    s2 = np.square(arr, dtype=np.float32).sum(axis=axis, dtype=np.float64)
+    mean_c = s1 / n
+    var_c = np.maximum(0.0, (s2 / n) - np.square(mean_c))
+    std_mean = np.sqrt(var_c).mean(axis=1)
+    lum_mean = mean_c.mean(axis=1)
+    return (std_mean < variance_thresh) & ((lum_mean > bg_bright_thresh) | (lum_mean < bg_dark_thresh))
+
+
+def _find_contiguous_content_spans(
+    is_gutter: np.ndarray,
+    min_gutter_size: int,
+    min_content_size: int,
+) -> List[Tuple[int, int]]:
+    """Finds contiguous content spans separated by true gutters of at least min_gutter_size."""
+    n = len(is_gutter)
+    if n == 0:
+        return []
+
+    padded_g = np.empty(n + 2, dtype=np.int8)
+    padded_g[0] = 0
+    padded_g[1:-1] = is_gutter.astype(np.int8)
+    padded_g[-1] = 0
+    diff_g = np.diff(padded_g)
+    starts_g = np.flatnonzero(diff_g == 1)
+    ends_g = np.flatnonzero(diff_g == -1)
+
+    cleaned_gutter = np.zeros(n, dtype=bool)
+    for s, e in zip(starts_g, ends_g):
+        if (e - s) >= min_gutter_size:
+            cleaned_gutter[s:e] = True
+
+    padded_c = np.empty(n + 2, dtype=np.int8)
+    padded_c[0] = 1
+    padded_c[1:-1] = cleaned_gutter.astype(np.int8)
+    padded_c[-1] = 1
+    diff_c = np.diff(padded_c)
+    starts_c = np.flatnonzero(diff_c == -1)
+    ends_c = np.flatnonzero(diff_c == 1)
+
+    return [
+        (int(s), int(e))
+        for s, e in zip(starts_c, ends_c)
+        if (e - s) >= min_content_size
+    ]
+
+
+def infer_shot_type(box_w: int, box_h: int, page_w: int = 800) -> str:
+    """Heuristic shot type classification based on panel geometry."""
+    aspect = box_h / float(max(1, box_w))
+    if box_h >= 850 and aspect >= 1.15:
+        return "close_up"
+    if box_h >= 600 and box_w >= int(page_w * 0.88):
+        return "splash"
+    if aspect <= 0.72:
+        return "wide"
+    return "medium"
+
 
 def detect_panels_gutter(
     image_path: Path,
     min_panel_height: int = 150,
     min_panel_width: int = 200,
     min_gutter_height: int = 15,
+    min_gutter_width: int = 15,
+    reading_order_y_tolerance: int = 50,
+    img: Optional[Image.Image] = None,
 ) -> List[Dict[str, Any]]:
-    """Detects panels in a manhwa page or strip using gutter slicing.
-    
-    Returns a list of dicts with:
-      - panel_id: e.g. "panel_001"
-      - bbox: {"x": int, "y": int, "w": int, "h": int}
-      - reading_order: int (1-indexed)
+    """Detects panels in a manhwa page or strip using vectorized 2D gutter slicing.
+
+    Fixes Phase 1 flaws:
+      1. Eliminates the 5px white gutter margin bleed on panel crops.
+      2. Detects vertical gutters within horizontal bands so side-by-side panels
+         are segmented individually instead of merged.
+      3. Uses vertical band grouping when sorting reading order (top-to-bottom,
+         left-to-right), avoiding bucket-boundary split errors.
     """
-    img = Image.open(image_path).convert("RGB")
-    arr = np.array(img, dtype=np.float32)
+    if img is None:
+        img = Image.open(image_path).convert("RGB")
+    else:
+        img = img.convert("RGB")
+    arr = np.asarray(img, dtype=np.float32)
     h, w, _ = arr.shape
-    
-    # 1. Classify each row as gutter or content
-    is_gutter = np.zeros(h, dtype=bool)
-    for y in range(h):
-        row = arr[y, :, :]
-        is_gutter[y] = is_gutter_row(row)
-        
-    # 2. Smooth small gutter interruptions (noise < min_gutter_height)
-    # A true gutter must be at least min_gutter_height contiguous rows
-    cleaned_gutter = np.zeros(h, dtype=bool)
-    start_g = None
-    for y in range(h):
-        if is_gutter[y]:
-            if start_g is None:
-                start_g = y
-        else:
-            if start_g is not None:
-                if (y - start_g) >= min_gutter_height:
-                    cleaned_gutter[start_g:y] = True
-                start_g = None
-    if start_g is not None and (h - start_g) >= min_gutter_height:
-        cleaned_gutter[start_g:h] = True
-        
-    # 3. Extract content slices (non-gutter spans)
-    slices = []
-    in_panel = False
-    start_y = 0
-    for y in range(h):
-        if not cleaned_gutter[y] and not in_panel:
-            in_panel = True
-            start_y = y
-        elif cleaned_gutter[y] and in_panel:
-            in_panel = False
-            panel_h = y - start_y
-            if panel_h >= min_panel_height:
-                slices.append((start_y, y))
-    if in_panel:
-        panel_h = h - start_y
-        if panel_h >= min_panel_height:
-            slices.append((start_y, h))
-            
-    # 4. For each vertical slice, refine horizontal boundaries [x_min, x_max]
-    detected_boxes = []
-    for (y1, y2) in slices:
-        panel_slice = arr[y1:y2, :, :]
-        
-        # Check column variance within this slice
-        col_std = np.std(panel_slice, axis=0).mean(axis=1) # shape (w,)
-        col_mean = np.mean(panel_slice, axis=(0, 2))       # shape (w,)
-        
-        is_col_content = (col_std > 10.0) | ((col_mean < 245.0) & (col_mean > 20.0))
-        content_indices = np.where(is_col_content)[0]
-        
-        if len(content_indices) > 0:
-            x1 = max(0, int(content_indices[0]) - 5)
-            x2 = min(w, int(content_indices[-1]) + 5)
-        else:
-            x1 = 0
-            x2 = w
-            
-        box_w = x2 - x1
-        box_h = y2 - y1
-        if box_w >= min_panel_width and box_h >= min_panel_height:
-            detected_boxes.append({"x": x1, "y": y1, "w": box_w, "h": box_h})
-            
-    # 5. Sort reading order (top to bottom, left to right with tolerance)
-    # Group by vertical proximity (within 50px)
-    detected_boxes.sort(key=lambda b: (b["y"], b["x"]))
-    
-    panels = []
-    for idx, box in enumerate(detected_boxes, start=1):
-        panels.append({
-            "panel_id": f"panel_{idx:03d}",
-            "bbox": box,
-            "reading_order": idx,
-        })
-        
+
+    # 1. Vectorized classification of each horizontal row as gutter or content
+    row_is_gutter = _gutter_mask_1d(
+        arr, axis=1, variance_thresh=12.0, bg_bright_thresh=240.0, bg_dark_thresh=10.0
+    )
+
+    # 2. Extract vertical content bands
+    y_slices = _find_contiguous_content_spans(
+        row_is_gutter,
+        min_gutter_size=min_gutter_height,
+        min_content_size=min_panel_height,
+    )
+
+    # 3. Within each vertical slice, detect horizontal spans (supports side-by-side panels)
+    detected_boxes: List[Tuple[int, Dict[str, int]]] = []
+    for band_idx, (y1, y2) in enumerate(y_slices):
+        band = arr[y1:y2, :, :]
+        col_is_gutter = _gutter_mask_1d(
+            band, axis=0, variance_thresh=10.0, bg_bright_thresh=245.0, bg_dark_thresh=10.0
+        )
+
+        x_spans = _find_contiguous_content_spans(
+            col_is_gutter,
+            min_gutter_size=min_gutter_width,
+            min_content_size=min_panel_width,
+        )
+
+        for x1, x2 in x_spans:
+            sub_band = arr[y1:y2, x1:x2, :]
+            sub_row_gutter = _gutter_mask_1d(
+                sub_band, axis=1, variance_thresh=12.0, bg_bright_thresh=240.0, bg_dark_thresh=10.0
+            )
+            active_rows = np.flatnonzero(~sub_row_gutter)
+            if len(active_rows) > 0:
+                ry1 = y1 + int(active_rows[0])
+                ry2 = y1 + int(active_rows[-1]) + 1
+            else:
+                ry1, ry2 = y1, y2
+
+            box_w = x2 - x1
+            box_h = ry2 - ry1
+            if box_w >= min_panel_width and box_h >= min_panel_height:
+                detected_boxes.append(
+                    (band_idx, {"x": int(x1), "y": int(ry1), "w": int(box_w), "h": int(box_h)})
+                )
+
+    # 4. Sort reading order by vertical band index, then left-to-right (x), then top-to-bottom (y)
+    _ = reading_order_y_tolerance
+    detected_boxes.sort(key=lambda item: (item[0], item[1]["x"], item[1]["y"]))
+
+    panels: List[Dict[str, Any]] = []
+    for idx, (_, box) in enumerate(detected_boxes, start=1):
+        panels.append(
+            {
+                "panel_id": f"panel_{idx:03d}",
+                "bbox": box,
+                "reading_order": idx,
+                "shot_type": infer_shot_type(box["w"], box["h"], page_w=w),
+            }
+        )
+
     logger.info(f"Detected {len(panels)} panels in {image_path}")
     return panels
 
-def crop_and_save_panels(image_path: Path, panels: List[Dict[str, Any]], output_dir: Path) -> List[Path]:
+
+def crop_and_save_panels(
+    image_path: Path,
+    panels: List[Dict[str, Any]],
+    output_dir: Path,
+    img: Optional[Image.Image] = None,
+) -> List[Path]:
     """Crops detected panels from the source image and saves them to output_dir."""
-    img = Image.open(image_path).convert("RGB")
+    if img is None:
+        img = Image.open(image_path).convert("RGB")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    crop_paths = []
+
+    crop_paths: List[Path] = []
     for p in panels:
         bbox = p["bbox"]
         x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
         crop = img.crop((x, y, x + w, y + h))
         crop_file = output_dir / f"{p['panel_id']}.png"
-        crop.save(crop_file, quality=95)
+        crop.save(crop_file, format="PNG", compress_level=1)
         crop_paths.append(crop_file)
-        
+
     return crop_paths

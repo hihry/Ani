@@ -1,47 +1,57 @@
 # Manhwa → Anime (M2A)
 
-Manhwa → Anime (M2A) is an end-to-end multimodal pipeline that transforms static manhwa webtoon strips into fully animated anime video sequences with synthesized voice acting, background music, and dynamic motion. Built with a high-performance Go orchestrator and a modular Python AI worker backend, M2A automates panel segmentation, visual narrative understanding via Vision-Language Models (VLMs), speech bubble inpainting, AI video generation, text-to-speech audio synthesis, and final video composition.
+Manhwa → Anime (M2A) is an end-to-end multimodal pipeline that transforms static vertical-scroll manhwa webtoon strips into animated 9:16 portrait anime video sequences with synthesized voice acting, burned anime subtitles, and dynamic camera motion. Built with a **Hybrid Go + Python Backend**, M2A pairs a deterministic compiled **Go Control Plane** (`cmd/m2a`, `internal/`) with a modular **Python AI Worker Plane** (`workers/`, `src/m2a/`) to automate vertical strip stitching, 2D panel segmentation, narrative scene understanding, speech bubble inpainting, shot routing, video generation, automatic quality control (QC), TTS audio synthesis, and FFmpeg timeline composition.
 
-## Architecture
+## Architecture (v0.2 Hybrid Go + Python)
 
-The system uses a hybrid architecture: a compiled Go orchestrator manages the pipeline lifecycle, state machine, file artifacts, and quality checks, delegating heavyweight AI inference tasks over HTTP to a lightweight FastAPI worker server.
+The system separates orchestration from AI/CV execution across two planes that read and write a single unified `RunState` contract (`runs/<run_id>/state.json`):
 
 ```text
-+-----------------------------------------------------------------------------+
-|                               Input Manhwa Strip                            |
-+-----------------------------------------------------------------------------+
-                                       |
-                                       v
-+-----------------------------------------------------------------------------+
-|                            Go Backend Orchestrator                          |
-|  - CLI Interface & Config Loader (default.yaml + compute tiers)             |
-|  - DAG Stage Execution & Artifact Pipeline Management                       |
-|  - Quality Control (QC) Gates & Validation Checks                           |
-+-----------------------------------------------------------------------------+
-          |                      ^                      |
-          | HTTP Request         | JSON Response        | Composition
-          v                      |                      v
-+----------------------------------+          +-------------------------------+
-|     Python AI Worker Server      |          |       FFmpeg Video Engine     |
-|         (FastAPI :8100)          |          |  - Video stitching & crossfade|
-+----------------------------------+          |  - Dialogue audio mixing      |
-| /segment     OpenCV / MagiV3     |          |  - Subtitles & visual effects |
-| /understand  Qwen3-VL VLM        |          +-------------------------------+
-| /inpaint     LaMa inpainting     |                          |
-| /tts         MeloTTS / Kokoro    |                          v
-+----------------------------------+          +-------------------------------+
-                                              |       Final Anime Video       |
-                                              |        (.mp4, 9:16)           |
-                                              +-------------------------------+
++-----------------------------------------------------------------------------------+
+|                                 Input Manhwa Strip                                |
+|                        (2-3 vertical webtoon pages: .png/.jpg)                    |
++-----------------------------------------------------------------------------------+
+                                          |
+                                          v
++-----------------------------------------------------------------------------------+
+|                        Go Control Plane (cmd/m2a & internal/)                     |
+|  - CLI (run, resume, inspect) + FastAPI Job Queue API (api/app.py) + Streamlit UI |
+|  - Config Loader (configs/default.yaml + tiers/t0.yaml, t1.yaml, t2.yaml)         |
+|  - Deterministic 12-Stage DAG Engine (internal/pipeline/engine.go + nodes.go)     |
+|  - Dual-Mode WorkerClient (internal/client: HTTP :8100 first, CLI fallback)       |
+|  - Auto-QC Gate & Route Degrader (internal/qc: i2v -> parallax -> kenburns)       |
++-----------------------------------------------------------------------------------+
+            |                                                   |
+            | HTTP (:8100) / CLI Fallback                       | Atomic Checkpoints
+            v                                                   v
++-----------------------------------------+     +-----------------------------------+
+|     Python AI Worker Plane (:8100)      |     |    Artifact & State Store         |
+|   (workers/server.py + pipeline_cli.py) |     |      (runs/<run_id>/)             |
++-----------------------------------------+     +-----------------------------------+
+| POST /ingest      Strip stitch (800px)  |     | state.json       Unified RunState |
+| POST /segment     2D Gutter + Magiv3    |     | stitched.png     Normalized strip |
+| POST /understand  Qwen3-VL + Char Bible |     | panels/          Panel crops      |
+| POST /inpaint     LaMa / Telea Clean    |     | understanding/   PanelJSON + Bible|
+| POST /render      I2V / Parallax / KB   |     | clean_plates/    Bubble-free art  |
+| POST /tts         MeloTTS / WAV Synth   |     | clips/           Rendered clips   |
+| POST /assemble    FFmpeg MP4/AVI/WebP   |     | audio/           Dialogue WAVs    |
++-----------------------------------------+     | output/          final_anime.mp4  |
+                                                +-----------------------------------+
 ```
 
-### Pipeline Stages
-1. **Perception**: Detects panel bounding boxes and gutters using OpenCV slicing or MagiV3.
-2. **Understanding**: Uses Vision-Language Models (e.g. Qwen3-VL) to extract scene descriptions, shot framing, camera motion prompts, and dialogue lines.
-3. **Cleanup**: Identifies speech bubbles and inpaints background artwork using LaMa.
-4. **Generation**: Synthesizes video clips via Image-to-Video models (Wan2.2, HunyuanVideo, Ken Burns) and generates dialogue audio with TTS (MeloTTS, Kokoro).
-5. **Composition**: Combines animated video clips, audio tracks, and transitions into a coherent vertical anime video.
-6. **Quality Control (QC)**: Validates character consistency, flicker thresholds, and text leakage before delivery.
+### 12-Stage End-to-End Pipeline Flow
+1. **`INGEST`**: Validates source images, copies to `pages/`, normalizes width to `800px`, and stitches `stitched.png` (`workers/ingest.py`).
+2. **`SEGMENT`**: Runs 2D horizontal + vertical gutter slicing (`workers/slicer.py`, `F1 = 1.0000`, `Mean IoU = 0.9968`) and saves `panels/panel_00X.png`.
+3. **`UNDERSTAND`**: Extracts shot framing, action summary, dialogue lines, SFX, character bible (`understanding/character_bible.json`), and motion prompts (`PanelJSON`).
+4. **`CHECKPOINT_1`**: Human review checkpoint for `PanelJSON` text, speakers, and bounding boxes (`PUT /jobs/{id}/checkpoint` or `--auto-approve`).
+5. **`CLEAN_PLATES`**: Creates speech bubble masks and inpaints text regions via LaMa / OpenCV Telea into `clean_plates/panel_00X_clean.png`.
+6. **`ROUTE`**: Assigns each panel to `i2v`, `parallax`, or `kenburns` using shot framing, visual motion intensity, camera motion taxonomy, and GPU budget (`routes/routing_plan.json`).
+7. **`CHECKPOINT_2`**: Human review checkpoint for animation route overrides before GPU rendering.
+8. **`GENERATE`**: Renders per-panel video clips (`clips/panel_00X_clip_01.avi`) from clean plates using P10 aspect-safe Ken Burns (blurred-fill letterbox for wide panels), occlusion-filled 2.5D Parallax, or ComfyUI I2V (`Wan 2.2`, `HunyuanVideo 1.5`, `LTX-2.3`).
+9. **`QC`**: Evaluates every clip (`internal/qc/evaluator.go`) on Identity (`>= 0.85`), Flicker (`<= 0.15`), Text Leakage (`0`), and Motion Sanity; automatically degrades failed clips (`i2v -> parallax -> kenburns`) and re-renders.
+10. **`TTS`**: Synthesizes playable PCM WAV speech tracks (`audio/*.wav`) per dialogue line and expands `panel.DurationS = max(duration_s, speech_dur + 0.3s)`.
+11. **`ASSEMBLE`**: Chains accepted clips with linear alpha crossfades, burns anime subtitles, writes `output/subtitles.srt` and `output/timeline.json`, mixes WAV audio, and encodes `output/final_anime.mp4` (plus `.avi` and `.webp`).
+12. **`DONE`**: Closes `StageHistory` timestamps, records `CostLedger`, and saves final `state.json`.
 
 ## Quick Start
 
@@ -54,69 +64,75 @@ The system uses a hybrid architecture: a compiled Go orchestrator manages the pi
 ```bash
 make worker-install
 ```
-Or manually:
-```bash
-cd workers
-pip install -r requirements.txt
-cd ..
-```
 
-### 2. Start the Python AI Worker Server
+### 2. Optional: Start the Persistent Python AI Worker Server
 ```bash
 make worker
 ```
-The FastAPI worker server will start listening at `http://127.0.0.1:8100`.
+The FastAPI worker server listens at `http://127.0.0.1:8100` with `ModelResidencyManager` keeping at most one heavy GPU model resident in VRAM. If `:8100` is not running, the Go `WorkerClient` automatically falls back to invoking `python workers/pipeline_cli.py`.
 
 ### 3. Build & Run the Go Orchestrator
-In a separate terminal:
 ```bash
-# Build binary
-make build
+# Build Go binary
+go build -o m2a.exe ./cmd/m2a
 
-# Run pipeline on a sample manhwa image with Tier 1 profile
-./m2a.exe run --pages sample.png --tier t1
+# Run full pipeline (auto-approving checkpoints CP1 & CP2)
+./m2a.exe run --pages data/eval/sample_page_1.png,data/eval/sample_page_2.png,data/eval/sample_page_3.png --tier t0 --lang en --auto-approve
+
+# Or pause at CP1/CP2 and resume after editing state.json
+./m2a.exe resume --run-id <run_id>
+./m2a.exe inspect --run-id <run_id>
+```
+
+### 4. Run Tests & Evaluation Benchmarks
+```bash
+# Go unit & integration tests
+go test ./... -v
+
+# Python unit & end-to-end tests
+python -m pytest tests/test_pipeline.py -v
+
+# Phase 1 Segmentation F1 & IoU benchmark
+python workers/eval_segmentation.py
 ```
 
 ## Project Structure
 
 ```text
-c:\hihry\Ani\
-├── cmd\
-│   └── m2a\                 # Main Go CLI entrypoint
-├── internal\                # Go backend internal packages
-│   ├── config\              # Configuration parsing and tier overlays
-│   ├── pipeline\            # Execution engine and DAG orchestration
-│   ├── client\              # HTTP client for Python AI worker API
-│   ├── models\              # Shared Go data structures
-│   └── qc\                  # Quality control evaluators
-├── workers\                 # Python AI worker microservice
-│   ├── __init__.py
-│   ├── server.py            # FastAPI service exposing AI inference endpoints
-│   └── requirements.txt     # Python ML and API dependencies
-├── configs\                 # YAML configuration profiles
-│   ├── default.yaml         # Base pipeline configuration
-│   └── tiers\               # Hardware tier overrides (T0, T1, T2)
-│       ├── t0.yaml
-│       ├── t1.yaml
-│       └── t2.yaml
-├── data\                    # Dataset and evaluation assets
-│   └── eval\                # Ground truth schemas and benchmark annotations
-│       └── ground_truth_schema.json
-├── Makefile                 # Automation targets for build, test, and worker
-├── .gitignore               # Ignored build artifacts, models, and virtual environments
-└── README.md                # Project documentation
+Ani/
+├── cmd/m2a/main.go              # Go CLI entrypoint (run, resume, inspect, version)
+├── internal/                    # Go Control Plane packages
+│   ├── config/                  # YAML configuration loader & tier overlay validator
+│   ├── model/                   # Canonical structs: PanelJSON, CharacterBible, RunState
+│   ├── client/                  # Dual-mode HTTP (:8100) + CLI fallback WorkerClient
+│   ├── qc/                      # Quality control threshold evaluator & fallback router
+│   └── pipeline/                # Go DAG Engine (engine.go) & 9 stage handlers (nodes.go)
+├── workers/                     # Python AI Worker Plane
+│   ├── server.py                # FastAPI worker service (:8100) + ModelResidencyManager
+│   ├── pipeline_cli.py          # CLI bridge for all 7 worker commands + state assembly
+│   ├── ingest.py                # Vertical strip normalization & stitching with page offsets
+│   ├── slicer.py                # 2D horizontal + vertical gutter panel detector (F1=1.00)
+│   ├── render_kenburns.py       # P10 blurred-fill letterbox + cubic-eased Ken Burns
+│   ├── render_parallax.py       # Occlusion-filled 2.5D depth parallax renderer
+│   ├── assembler.py             # Bubble inpainter, WAV synth, QC metrics, MP4/AVI/WebP
+│   └── eval_segmentation.py     # Segmentation IoU / Precision / Recall / F1 evaluator
+├── src/m2a/                     # Interoperable Python package (state, config, graph, nodes)
+├── api/                         # FastAPI Job Queue API (api/app.py) with CP1/CP2 hooks
+├── ui/                          # Streamlit Checkpoint Review Editor (ui/streamlit_app.py)
+├── configs/                     # default.yaml, models.yaml, tiers/{t0,t1,t2}.yaml
+├── data/eval/                   # Synthetic manhwa pages + ground_truth.json + schema
+├── tests/test_pipeline.py       # Python end-to-end pytest suite
+└── Manhwa_to_Anime_Prototype_Proposal.pdf # v0.2 Architecture & Phase 0/1 Flaw Audit PDF
 ```
 
 ## Compute Tiers
 
-M2A provides configurable tiers to match local or cloud GPU compute:
-
 | Tier | Hardware Target | Video Generation Model | Vision-Language Model (VLM) | TTS Audio Engine |
 | :--- | :--- | :--- | :--- | :--- |
-| **T0** | CPU Only (No GPU) | Ken Burns Pan/Zoom (rule-based) | Qwen3-VL-2B | Kokoro / Edge-TTS |
-| **T1** | 12–16 GB VRAM (RTX 3080/4070) | Wan2.2-Ti2V-5B (fallback: Ken Burns) | Qwen3-VL-8B (4-bit quantized) | MeloTTS (fallback: Kokoro) |
-| **T2** | 24–48 GB VRAM (RTX 4090/A5000/Cloud) | Wan2.2-I2V-A14B (fallback: Wan2.2-Ti2V-5B, Hunyuan1.5) | Qwen3-VL-8B | MeloTTS (fallback: Kokoro) |
+| **T0** | CPU Only (No GPU) | Aspect-Safe Ken Burns & 2.5D Parallax | Qwen3-VL-2B / CV Analyzer | Kokoro / Harmonic WAV Synth |
+| **T1** | 12–16 GB VRAM (RTX 3080/4070) | Wan2.2-Ti2V-5B (fallback: Parallax/KB) | Qwen3-VL-8B (4-bit quantized) | MeloTTS (fallback: Kokoro) |
+| **T2** | 24–48 GB VRAM (RTX 4090/A5000/Cloud) | Wan2.2-I2V-A14B (fallback: Ti2V-5B, Hunyuan1.5) | Qwen3-VL-8B (FP16) | MeloTTS / Chatterbox |
 
 ## License
 
-This project is licensed under the Apache 2.0 License. See the LICENSE file for details.
+This project is licensed under the Apache 2.0 License.

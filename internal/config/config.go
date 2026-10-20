@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 
@@ -70,6 +71,8 @@ type QCConfig struct {
 	IdentityThreshold float64 `yaml:"identity_threshold" json:"identity_threshold"`
 	FlickerThreshold  float64 `yaml:"flicker_threshold"  json:"flicker_threshold"`
 	MaxNewTextLines   int     `yaml:"max_new_text_lines" json:"max_new_text_lines"`
+	MinMotion         float64 `yaml:"min_motion,omitempty" json:"min_motion,omitempty"`
+	MaxMotion         float64 `yaml:"max_motion,omitempty" json:"max_motion,omitempty"`
 }
 
 // WorkerConfig holds Python AI worker daemon host and port.
@@ -90,7 +93,9 @@ func Load(defaultPath string, tierPath string) (*PipelineConfig, error) {
 	}
 
 	var cfg PipelineConfig
-	if err := yaml.Unmarshal(defaultData, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(defaultData))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal default config %q: %w", defaultPath, err)
 	}
 
@@ -99,8 +104,12 @@ func Load(defaultPath string, tierPath string) (*PipelineConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read tier config %q: %w", tierPath, err)
 		}
-		if err := yaml.Unmarshal(tierData, &cfg); err != nil {
-			return nil, fmt.Errorf("unmarshal tier config %q: %w", tierPath, err)
+		if len(bytes.TrimSpace(tierData)) > 0 {
+			tierDec := yaml.NewDecoder(bytes.NewReader(tierData))
+			tierDec.KnownFields(true)
+			if err := tierDec.Decode(&cfg); err != nil {
+				return nil, fmt.Errorf("unmarshal tier config %q: %w", tierPath, err)
+			}
 		}
 	}
 
@@ -136,6 +145,18 @@ func (c *PipelineConfig) Validate() error {
 	}
 	if c.Composition.FPS <= 0 {
 		return fmt.Errorf("composition FPS must be positive, got %d", c.Composition.FPS)
+	}
+	if c.Composition.TransitionType != "" && c.Composition.TransitionType != "crossfade" && c.Composition.TransitionType != "cut" {
+		return fmt.Errorf("unsupported transition_type %q (must be crossfade or cut)", c.Composition.TransitionType)
+	}
+	if c.QC.IdentityThreshold < 0 || c.QC.IdentityThreshold > 1 {
+		return fmt.Errorf("qc.identity_threshold must be in [0, 1], got %f", c.QC.IdentityThreshold)
+	}
+	if c.QC.FlickerThreshold < 0 || c.QC.FlickerThreshold > 1 {
+		return fmt.Errorf("qc.flicker_threshold must be in [0, 1], got %f", c.QC.FlickerThreshold)
+	}
+	if c.Worker.Port < 0 || c.Worker.Port > 65535 {
+		return fmt.Errorf("worker.port must be in [0, 65535], got %d", c.Worker.Port)
 	}
 	return nil
 }

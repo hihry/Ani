@@ -207,3 +207,28 @@ func TestRunStateSaveAndLoad(t *testing.T) {
 		t.Errorf("audio track mismatch")
 	}
 }
+
+func TestRunStateSave_RejectsInvalidDurationAndLang(t *testing.T) {
+	tmpDir := t.TempDir()
+	state := NewRunState([]string{"p1.png"}, "ko", "t0")
+	p := NewPanelJSON("p_1", BBox{X: 0, Y: 0, W: 100, H: 100})
+	p.DurationS = 12.3 // exceeds MaxPanelDuration (10.0)
+	state.Panels = []PanelJSON{p}
+
+	if err := state.Save(tmpDir); err == nil {
+		t.Fatal("expected Save to reject duration_s=12.3, got nil")
+	}
+
+	state.Panels[0].DurationS = ClampDuration(12.3)
+	if state.Panels[0].DurationS != 10.0 {
+		t.Fatalf("expected ClampDuration(12.3) == 10.0, got %f", state.Panels[0].DurationS)
+	}
+	if err := state.Save(tmpDir); err != nil {
+		t.Fatalf("expected clamped duration to save cleanly, got %v", err)
+	}
+
+	state.Config.SourceLanguage = "zh"
+	if err := state.Save(tmpDir); err == nil {
+		t.Fatal("expected Save to reject unsupported language 'zh', got nil")
+	}
+}

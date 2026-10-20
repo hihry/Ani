@@ -17,15 +17,16 @@ type NodeFunc func(ctx context.Context, state *model.RunState, cfg *config.Pipel
 
 // Engine orchestrates the pipeline execution state machine.
 type Engine struct {
-	nodes     map[model.PipelineStage]NodeFunc
-	fallbacks map[model.PipelineStage]NodeFunc
-	order     []model.PipelineStage
-	runDir    string
-	logger    *slog.Logger
+	nodes                  map[model.PipelineStage]NodeFunc
+	fallbacks              map[model.PipelineStage]NodeFunc
+	order                  []model.PipelineStage
+	runDir                 string
+	logger                 *slog.Logger
+	autoApproveCheckpoints bool
 }
 
 // NewEngine initializes an Engine with the canonical stage order:
-// INGEST → SEGMENT → UNDERSTAND → CHECKPOINT_1 → CLEAN_PLATES → ROUTE → CHECKPOINT_2 → GENERATE → QC → TTS → ASSEMBLE → DONE.
+// INGEST → SEGMENT → UNDERSTAND → CHECKPOINT_1 → CLEAN_PLATES → ROUTE → TTS → CHECKPOINT_2 → GENERATE → QC → ASSEMBLE → DONE.
 func NewEngine(runDir string, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.Default()
@@ -41,16 +42,21 @@ func NewEngine(runDir string, logger *slog.Logger) *Engine {
 			model.StageCheckpoint1,
 			model.StageCleanPlates,
 			model.StageRoute,
+			model.StageTTS,
 			model.StageCheckpoint2,
 			model.StageGenerate,
 			model.StageQC,
-			model.StageTTS,
 			model.StageAssemble,
 			model.StageDone,
 		},
 		runDir: runDir,
 		logger: logger,
 	}
+}
+
+// SetAutoApproveCheckpoints configures whether CHECKPOINT_1 and CHECKPOINT_2 automatically advance without pausing.
+func (e *Engine) SetAutoApproveCheckpoints(auto bool) {
+	e.autoApproveCheckpoints = auto
 }
 
 // RegisterNode registers a handler for a given pipeline stage.
@@ -99,7 +105,6 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 		return nil
 	}
 
-	// Resuming from human review checkpoint 1: advance to next stage
 	if state.CurrentStage == model.StageCheckpoint1 {
 		idx := e.indexOfStage(model.StageCheckpoint1)
 		if idx >= 0 && idx+1 < len(e.order) {
@@ -113,7 +118,6 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 		}
 	}
 
-	// Resuming from human review checkpoint 2: advance to next stage
 	if state.CurrentStage == model.StageCheckpoint2 {
 		idx := e.indexOfStage(model.StageCheckpoint2)
 		if idx >= 0 && idx+1 < len(e.order) {
@@ -127,7 +131,6 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 		}
 	}
 
-	// Resuming after failure: find the failed stage in history and retry it
 	if state.CurrentStage == model.StageFailed {
 		var retryStage model.PipelineStage
 		for i := len(state.StageHistory) - 1; i >= 0; i-- {
@@ -153,7 +156,6 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 		return e.execute(ctx, state, cfg, idx)
 	}
 
-	// Resuming an operational stage
 	idx := e.indexOfStage(state.CurrentStage)
 	if idx < 0 {
 		return fmt.Errorf("unknown current stage in execution order: %q", state.CurrentStage)
@@ -167,25 +169,38 @@ func (e *Engine) execute(ctx context.Context, state *model.RunState, cfg *config
 	for i := startIdx; i < len(e.order); i++ {
 		stage := e.order[i]
 
-		// Check for cancellation
 		if err := ctx.Err(); err != nil {
 			state.RecordError(fmt.Sprintf("pipeline cancelled at stage %s: %v", stage, err))
 			_ = state.Save(e.runDir)
 			return err
 		}
 
-		// Stage DONE terminates the pipeline successfully
 		if stage == model.StageDone {
 			e.logger.Info("Pipeline completed successfully", "stage", stage)
 			state.CurrentStage = model.StageDone
+			now := time.Now().UTC()
+			if len(state.StageHistory) > 0 {
+				lastIdx := len(state.StageHistory) - 1
+				if state.StageHistory[lastIdx].EndedAt == nil {
+					state.StageHistory[lastIdx].EndedAt = &now
+				}
+			}
 			if err := state.Save(e.runDir); err != nil {
 				return fmt.Errorf("failed to save completed state: %w", err)
 			}
 			return nil
 		}
 
-		// Checkpoint stages pause for human review and return cleanly
 		if stage == model.StageCheckpoint1 || stage == model.StageCheckpoint2 {
+			if e.autoApproveCheckpoints {
+				e.logger.Info(fmt.Sprintf("Auto-approving checkpoint %s", stage), "stage", stage)
+				if i+1 < len(e.order) {
+					nextStage := e.order[i+1]
+					state.AdvanceTo(nextStage)
+					_ = state.Save(e.runDir)
+				}
+				continue
+			}
 			e.logger.Info(fmt.Sprintf("Reached checkpoint %s; pausing for human review", stage), "stage", stage)
 			state.CurrentStage = stage
 			if err := state.Save(e.runDir); err != nil {
@@ -194,7 +209,6 @@ func (e *Engine) execute(ctx context.Context, state *model.RunState, cfg *config
 			return nil
 		}
 
-		// 1. Log "Starting stage X"
 		e.logger.Info(fmt.Sprintf("Starting stage %s", stage), "stage", stage)
 
 		fn, ok := e.nodes[stage]
@@ -206,20 +220,16 @@ func (e *Engine) execute(ctx context.Context, state *model.RunState, cfg *config
 			return err
 		}
 
-		// 2. Call the registered NodeFunc
 		start := time.Now()
 		err := fn(ctx, state, cfg)
 		duration := time.Since(start)
 
-		// 3. Record timing in cost ledger
 		state.RecordStageCost(string(stage), duration.Seconds())
 
-		// 4. Save state checkpoint
 		if saveErr := state.Save(e.runDir); saveErr != nil {
 			e.logger.Error("Failed to save state checkpoint", "stage", stage, "error", saveErr)
 		}
 
-		// 5. If error, record it and check if stage has a fallback; if not, mark FAILED
 		if err != nil {
 			state.RecordError(fmt.Sprintf("stage %s failed: %v", stage, err))
 			e.logger.Error("Stage execution failed", "stage", stage, "error", err)
@@ -248,11 +258,9 @@ func (e *Engine) execute(ctx context.Context, state *model.RunState, cfg *config
 			}
 		}
 
-		// 6. Log "Completed stage X in Y seconds"
 		e.logger.Info(fmt.Sprintf("Completed stage %s in %.2f seconds", stage, duration.Seconds()),
 			"stage", stage, "duration_s", duration.Seconds())
 
-		// 7. Advance to next stage
 		if i+1 < len(e.order) {
 			nextStage := e.order[i+1]
 			state.AdvanceTo(nextStage)
