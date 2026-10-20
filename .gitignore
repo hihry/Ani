@@ -1,25 +1,41 @@
-# Byte-compiled / optimized / DLL files
+# === Go ===
+m2a
+m2a.exe
+*.exe
+*.test
+*.out
+vendor/
+
+# === Python ===
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Environments
+*.pyo
 .venv/
-env/
 venv/
-ENV/
+*.egg-info/
+dist/
+build/
 
-# ML/DL files
+# === ML / Data ===
 runs/
 *.pt
+*.pth
 *.safetensors
 *.ckpt
 models/
-
-# Data evaluation
 data/eval/*.png
 data/eval/*.jpg
+data/eval/*.webp
 
-# IDE / Editor
+# === IDE ===
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Misc ===
+*.log

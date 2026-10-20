@@ -1,5 +1,10 @@
+# T2: 24-48 GB GPU (e.g., RTX 4090, A5000, rented cloud)
 generation:
   primary_model: "wan22-i2v-a14b"
+  fallback_models:
+    - "wan22-ti2v-5b"
+    - "hunyuan15"
+  max_retries: 3
 
 understanding:
   vlm: "qwen3-vl-8b"
