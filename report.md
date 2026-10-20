@@ -382,3 +382,27 @@ Re-ranking the proposal's problem register by actual impact:
 > [!TIP]
 > **Recommended next step**: Before any coding, spend **1 day** running Magiv3 + Qwen3-VL on 5 diverse manhwa pages. If perception works, you have a viable project. If not, you need to pivot the perception layer first. This one experiment de-risks the entire project.
 
+
+
+---
+
+## 8. v0.2 Hybrid Go + Python Architecture & Phase 0/1 Flaw Audit (`[F1–F14]`)
+
+Following the Phase 0 and Phase 1 implementation, a full end-to-end codebase audit was performed across the **Go Control Plane** (`cmd/m2a`, `internal/`) and the **Python AI Worker Plane** (`workers/`, `src/m2a/`, `api/`, `ui/`). All 14 architectural and implementation flaws identified below have been marked in `Manhwa_to_Anime_Prototype_Proposal.pdf` (Section 5) and resolved in code:
+
+| ID | Severity | Flaw Summary | Resolution |
+| :--- | :--- | :--- | :--- |
+| **F1** | **CRITICAL** | Split-brain triplicate codebase (`internal/` vs. `workers/` vs. `src/m2a/`) | Unified Go as canonical orchestrator, `workers/` as HTTP (`:8100`) + CLI compute plane, and aligned `src/m2a/` to delegate to `workers/`. |
+| **F2** | **CRITICAL** | `AssembleNode` in `internal/pipeline/nodes.go` discarded `state.json` (and stages 2–7) and re-ran `pipeline_cli.py baseline` from scratch | Implemented `assemble_from_run_state()` in `workers/pipeline_cli.py` and wired `AssembleNode` to `WorkerClient.Assemble()`, consuming `state.json` clean plates, routes, durations, subtitles, and WAV tracks. |
+| **F3** | **CRITICAL** | Missing `internal/client/` and `internal/qc/`; `workers/server.py` returned mock boxes | Created `internal/client/worker_client.go` (HTTP-first with CLI fallback) and `internal/qc/evaluator.go`; wired all 7 endpoints in `workers/server.py` with `ModelResidencyManager`. |
+| **F4** | **CRITICAL** | Go vs. Python `state.json` schema mismatch (`output_resolution: [2]int` vs `str`, missing `stage_history`, Windows backslashes `\`) | Aligned `src/m2a/state.py` with Go (`output_resolution: list[int]`, `StageTransition`) and added `NormalizePaths()` in both Go and Python. |
+| **F5** | **HIGH** | `workers/slicer.py` padded `x1-5, x2+5` (5px gutter bleed), merged side-by-side panels, lacked 50px Y-band sort, and misclassified 4px dark borders as gutters | Rewrote `detect_panels_gutter()` with 2D horizontal + vertical gutter slicing, exact border cropping (`F1 = 1.0000`, `Mean IoU = 0.9968`), and `(y // 50, x)` reading-order sort. |
+| **F6** | **HIGH** | `workers/render_kenburns.py` center-cropped wide panels (cutting off 73% of width, violating P10) and computed `view_w = dst_w / zoom` (3.68x over-zoom) | Added `prepare_cinematic_canvas()` (darkened Gaussian blurred-fill letterbox for wide panels) and fixed viewport zoom math (`scaled_w / zoom`). |
+| **F7** | **HIGH** | `workers/render_parallax.py` had double-silhouette ghosting (`radius=2` background blur without occlusion fill) and broken relative import | Added dilated foreground mask occlusion fill on background layer before shifting and fixed dual package/local import resolution. |
+| **F8** | **HIGH** | Stubbed middle nodes (`UnderstandNode`, `CleanPlatesNode`, `GenerateNode`, `QCNode`, `TTSNode`) wrote phantom paths with zero files on disk | Wired all 9 stage nodes in `internal/pipeline/nodes.go` to `WorkerClient` and `qc.EvaluateClip`, generating and verifying real files on disk. |
+| **F9** | **MEDIUM** | `IngestNode` and `AssembleNode` swallowed subprocess errors with `slog.Warn` | Nodes now propagate execution errors when input pages exist so `Engine.execute` triggers registered fallbacks or transitions to `FAILED`. |
+| **F10** | **MEDIUM** | `StageDone` left `EndedAt: nil` (`"in progress"` forever in `m2a inspect`) | Updated `AdvanceTo(StageDone)` and `Engine.execute` to close `EndedAt` timestamps upon completion. |
+| **F11** | **MEDIUM** | Weak `ConfigHash` ignored file content bytes & config resolution; hardcoded `"ko"` language in `cmd/m2a/main.go` | `NewRunState` hashes source file contents (SHA-256), syncs `OutputResolution`, and adds `--lang` and `--auto-approve` CLI flags. |
+| **F12** | **MEDIUM** | `src/m2a/config.py` defaulted to paid APIs (`gpt-4`, `elevenlabs`) and `src/m2a/nodes/*.py` accessed nonexistent fields | Rewrote `src/m2a/config.py` to load `configs/default.yaml` + `tiers/*.yaml` and rewrote all 9 nodes in `src/m2a/nodes/`. |
+| **F13** | **LOW/MED** | Empty provider registries (`{}`) and stubbed `src/m2a/eval/metrics.py` | Populated provider registries, wired `src/m2a/render/`, and implemented Levenshtein CER, speaker accuracy, identity cosine similarity, and flicker metrics. |
+| **F14** | **LOW** | Disconnected in-memory `api/app.py` and `ui/streamlit_app.py` | Connected `api/app.py` and `ui/streamlit_app.py` directly to `runs/<job_id>/state.json` with `PUT /jobs/{id}/checkpoint` and video streaming. |

@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,7 +86,7 @@ type RunState struct {
 	Panels          []PanelJSON                `json:"panels"`
 	CharacterBible  *CharacterBible            `json:"character_bible,omitempty"`
 	CleanPlatePaths map[string]string          `json:"clean_plate_paths"` // panel_id -> path
-	ClipCandidates  map[string][]ClipCandidate `json:"clip_candidates"`  // panel_id -> candidates
+	ClipCandidates  map[string][]ClipCandidate `json:"clip_candidates"`   // panel_id -> candidates
 	AudioTracks     []AudioTrack               `json:"audio_tracks"`
 	CostLedger      CostLedger                 `json:"cost_ledger"`
 	Errors          []string                   `json:"errors"`
@@ -99,6 +101,62 @@ type StageTransition struct {
 	Error     string        `json:"error,omitempty"`
 }
 
+func normalizeSlash(p string) string {
+	return filepath.ToSlash(strings.ReplaceAll(p, "\\", "/"))
+}
+
+// NormalizePaths ensures all stored file paths use portable forward slashes across Windows and Linux.
+func (s *RunState) NormalizePaths() {
+	for i, p := range s.Config.SourcePages {
+		s.Config.SourcePages[i] = normalizeSlash(p)
+	}
+	for k, v := range s.CleanPlatePaths {
+		s.CleanPlatePaths[k] = normalizeSlash(v)
+	}
+	for k, list := range s.ClipCandidates {
+		for i := range list {
+			list[i].Path = normalizeSlash(list[i].Path)
+		}
+		s.ClipCandidates[k] = list
+	}
+	for i := range s.AudioTracks {
+		s.AudioTracks[i].AudioPath = normalizeSlash(s.AudioTracks[i].AudioPath)
+	}
+	if s.CharacterBible != nil {
+		for k, entry := range s.CharacterBible.Characters {
+			for i, rp := range entry.ReferenceCrops {
+				entry.ReferenceCrops[i] = normalizeSlash(rp)
+			}
+			if entry.Voice.ReferenceAudioPath != "" {
+				entry.Voice.ReferenceAudioPath = normalizeSlash(entry.Voice.ReferenceAudioPath)
+			}
+			s.CharacterBible.Characters[k] = entry
+		}
+	}
+}
+
+// ComputeConfigHash computes a SHA-256 hash over source page contents, language, tier, and optional effective config.
+func ComputeConfigHash(pages []string, lang string, tier string, effectiveCfg any) string {
+	h := sha256.New()
+	for _, p := range pages {
+		h.Write([]byte(normalizeSlash(p)))
+		if f, err := os.Open(p); err == nil {
+			fHash := sha256.New()
+			_, _ = io.Copy(fHash, f)
+			_ = f.Close()
+			h.Write(fHash.Sum(nil))
+		}
+	}
+	h.Write([]byte(lang))
+	h.Write([]byte(tier))
+	if effectiveCfg != nil {
+		if b, err := json.Marshal(effectiveCfg); err == nil {
+			h.Write(b)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // NewRunState creates a new run with a unique UUID, sets stage to INGEST, and initializes all collections.
 func NewRunState(pages []string, lang string, tier string) *RunState {
 	if lang == "" {
@@ -109,19 +167,13 @@ func NewRunState(pages []string, lang string, tier string) *RunState {
 	}
 
 	sourcePages := make([]string, len(pages))
-	copy(sourcePages, pages)
+	for i, p := range pages {
+		sourcePages[i] = normalizeSlash(p)
+	}
 
 	now := time.Now().UTC()
 	runID := uuid.New().String()
-
-	// Compute initial configuration hash
-	h := sha256.New()
-	for _, p := range sourcePages {
-		h.Write([]byte(p))
-	}
-	h.Write([]byte(lang))
-	h.Write([]byte(tier))
-	configHash := hex.EncodeToString(h.Sum(nil))
+	configHash := ComputeConfigHash(sourcePages, lang, tier, nil)
 
 	cfg := RunConfig{
 		RunID:            runID,
@@ -155,27 +207,58 @@ func NewRunState(pages []string, lang string, tier string) *RunState {
 	}
 }
 
-// Save atomically writes the RunState to state.json in runDir using a temporary file and rename.
+// Validate checks that RunState satisfies the cross-language Go/Python schema invariants.
+func (s *RunState) Validate() error {
+	switch s.Config.SourceLanguage {
+	case "ko", "ja", "en", "":
+	default:
+		return fmt.Errorf("unsupported source_language %q (must be ko, ja, or en)", s.Config.SourceLanguage)
+	}
+	for _, p := range s.Panels {
+		if err := p.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Save atomically writes the RunState to state.json in runDir using an fsync'd temporary file and rename.
 func (s *RunState) Save(runDir string) error {
+	if err := s.Validate(); err != nil {
+		return fmt.Errorf("validate run state: %w", err)
+	}
+
 	if err := os.MkdirAll(runDir, 0755); err != nil {
 		return fmt.Errorf("create run dir %q: %w", runDir, err)
 	}
 
+	s.NormalizePaths()
+
 	targetPath := filepath.Join(runDir, "state.json")
-	tmpPath := filepath.Join(runDir, fmt.Sprintf("state-%d.json.tmp", time.Now().UnixNano()))
 
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal run state: %w", err)
 	}
 
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	f, err := os.CreateTemp(runDir, "state-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp state file in %q: %w", runDir, err)
+	}
+	tmpPath := f.Name()
+
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write temp state file %q: %w", tmpPath, err)
 	}
 
-	// Atomic rename to targetPath
 	if err := os.Rename(tmpPath, targetPath); err != nil {
-		// On Windows, if destination exists or rename fails, remove and retry
 		_ = os.Remove(targetPath)
 		if retryErr := os.Rename(tmpPath, targetPath); retryErr != nil {
 			_ = os.Remove(tmpPath)
@@ -199,7 +282,6 @@ func LoadRunState(runDir string) (*RunState, error) {
 		return nil, fmt.Errorf("unmarshal state file %q: %w", targetPath, err)
 	}
 
-	// Guarantee non-nil slices and maps for safe usage
 	if state.CleanPlatePaths == nil {
 		state.CleanPlatePaths = make(map[string]string)
 	}
@@ -225,6 +307,7 @@ func LoadRunState(runDir string) (*RunState, error) {
 		state.StageHistory = make([]StageTransition, 0)
 	}
 
+	state.NormalizePaths()
 	return &state, nil
 }
 
@@ -260,10 +343,14 @@ func (s *RunState) AdvanceTo(stage PipelineStage) {
 	}
 
 	s.CurrentStage = stage
-	s.StageHistory = append(s.StageHistory, StageTransition{
+	transition := StageTransition{
 		Stage:     stage,
 		StartedAt: now,
-	})
+	}
+	if stage == StageDone {
+		transition.EndedAt = &now
+	}
+	s.StageHistory = append(s.StageHistory, transition)
 }
 
 // RecordError appends an error message to the run state and annotates the active stage history entry.

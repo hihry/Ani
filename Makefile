@@ -1,14 +1,19 @@
-.PHONY: build run test lint clean worker worker-install inspect
+.PHONY: build run test test-py lint clean worker worker-install inspect
+
+BIN ?= m2a.exe
 
 # === Go Backend ===
 build:
-	go build -o m2a.exe ./cmd/m2a/
+	go build -o $(BIN) ./cmd/m2a/
 
 run: build
-	./m2a.exe run --pages sample.png --tier t1
+	./$(BIN) run --pages data/eval/sample_page_1.png,data/eval/sample_page_2.png,data/eval/sample_page_3.png --tier t1 --lang en --auto-approve
 
 test:
 	go test ./... -v
+
+test-py:
+	python -m pytest tests/test_pipeline.py -v
 
 lint:
 	go vet ./...
@@ -22,7 +27,7 @@ worker:
 
 # === Maintenance ===
 clean:
-	rm -rf m2a.exe runs/
+	rm -rf $(BIN) m2a runs/
 
 inspect:
-	./m2a.exe inspect --run-dir $(RUN_DIR)
+	./$(BIN) inspect --run-dir $(RUN_DIR)

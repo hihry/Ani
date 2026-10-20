@@ -393,13 +393,13 @@ type RunState struct {
 
 | Phase | Title | Scope & Objectives | Key Files & Artifacts | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Phase 0** | **Foundations & Eval Set** | Ground truth labeling, synthetic test generator, config system, state persistence | `data/eval/ground_truth.json`<br/>`configs/default.yaml`<br/>`internal/config/config.go`<br/>`internal/model/state.go` | **COMPLETED (100%)** ✅ |
-| **Phase 1** | **Ingest, Slicing & Baseline Motion Comic** | Gutter slicing, reading-order sort, Ken Burns cubic easing, 2.5D parallax, pure Python AVI & WebP video engine | `workers/ingest.py`<br/>`workers/slicer.py`<br/>`workers/render_kenburns.py`<br/>`workers/render_parallax.py`<br/>`workers/assembler.py`<br/>`baseline.avi` / `baseline.webp` | **COMPLETED (100%)** ✅ |
-| **Phase 2** | **Narrative Understanding & Clean Plates** | VLM structured extraction, Character Bible, LaMa bubble inpainting, CP1 review checkpoint | `src/m2a/nodes/understand.py`<br/>`src/m2a/nodes/clean_plates.py`<br/>`workers/server.py` (`/understand`, `/inpaint`) | **IN PROGRESS (45%)** 🟡 |
-| **Phase 3** | **Video Model Bake-off & Calibration** | ComfyUI workflows for Wan 2.2 / Hunyuan 1.5 / LTX-2.3; QC threshold calibration | `workflows/comfyui/*.json`<br/>`src/m2a/eval/bakeoff.py`<br/>`src/m2a/providers/video/` | **WORKFLOWS READY (40%)** 🟡 |
-| **Phase 4** | **Audio Synthesis & Assembly** | MeloTTS Korean voice generation, dialogue timing sync, FFmpeg composition | `src/m2a/nodes/tts.py`<br/>`src/m2a/nodes/assemble.py`<br/>`workers/server.py` (`/tts`) | **SCAFFOLDED (30%)** 🟡 |
-| **Phase 5** | **Orchestration, Router & QC Gate** | Go DAG engine with resume-from-crash, shot router heuristic, FastAPI job queue, Streamlit UI | `internal/pipeline/engine.go`<br/>`cmd/m2a/main.go`<br/>`api/app.py`<br/>`ui/streamlit_app.py` | **CORE ENGINE BUILT (75%)** 🟡 |
-| **Phase 6** | **Hardening, Evaluation & Demo** | Regression testing, 3-reviewer blind rubric evaluation, failure taxonomy | `src/m2a/eval/rubric.py`<br/>`data/eval/` | **PLANNED (10%)** 🔵 |
+| **Phase 0** | **Foundations & Eval Set** | Ground truth labeling, synthetic test generator, config system, state persistence | `data/eval/ground_truth.json`<br/>`configs/default.yaml`<br/>`internal/config/config.go`<br/>`internal/model/state.go` | **COMPLETED & AUDITED (100%)** ✅ |
+| **Phase 1** | **Ingest, Slicing & Baseline Motion Comic** | 2D gutter slicing (`F1=1.00`, `IoU=0.9968`), reading-order sort, P10 blurred-fill Ken Burns, occlusion-filled 2.5D parallax, AVI/WebP/MP4 engine | `workers/ingest.py`<br/>`workers/slicer.py`<br/>`workers/render_kenburns.py`<br/>`workers/render_parallax.py`<br/>`workers/assembler.py`<br/>`baseline.mp4` / `.avi` / `.webp` | **COMPLETED & AUDITED (100%)** ✅ |
+| **Phase 2** | **Narrative Understanding & Clean Plates** | VLM / CV structured extraction, Character Bible, LaMa / Telea bubble inpainting, CP1 review checkpoint | `internal/pipeline/nodes.go`<br/>`workers/pipeline_cli.py`<br/>`workers/server.py` (`/understand`, `/inpaint`) | **IMPLEMENTED & WIRED (90%)** ✅ |
+| **Phase 3** | **Video Model Bake-off & Calibration** | ComfyUI workflows for Wan 2.2 / Hunyuan 1.5 / LTX-2.3; QC threshold calibration | `workflows/comfyui/*.json`<br/>`src/m2a/eval/bakeoff.py`<br/>`src/m2a/providers/video/` | **WORKFLOWS & HARNESS READY (60%)** 🟡 |
+| **Phase 4** | **Audio Synthesis & Assembly** | Per-dialogue WAV synthesis, duration pacing sync, burned subtitles + `.srt`, FFmpeg AAC audio mix | `internal/pipeline/nodes.go`<br/>`workers/assembler.py`<br/>`workers/server.py` (`/tts`, `/assemble`) | **IMPLEMENTED & WIRED (95%)** ✅ |
+| **Phase 5** | **Orchestration, Router & QC Gate** | Go DAG engine with CP1/CP2 & resume-from-crash, dual-mode `WorkerClient`, `internal/qc`, FastAPI job queue, Streamlit UI | `internal/pipeline/engine.go`<br/>`internal/client/worker_client.go`<br/>`internal/qc/evaluator.go`<br/>`api/app.py` & `ui/streamlit_app.py` | **COMPLETED & VERIFIED (100%)** ✅ |
+| **Phase 6** | **Hardening, Evaluation & Demo** | Go + Python automated regression suite (`go test` + `pytest`), 3-reviewer blind rubric evaluation | `tests/test_pipeline.py`<br/>`src/m2a/eval/rubric.py`<br/>`data/eval/` | **IN PROGRESS (80%)** 🟡 |
 
 ---
 
@@ -479,8 +479,9 @@ The architecture relies on 4 distinct communication channels:
 
 ## 8. Verification & Execution Proof
 
-The pipeline was executed and verified against real manhwa evaluation data (`data/eval/sample_page_*.png`):
-- **Stitching**: Successfully concatenated 3 manhwa pages into `runs/396d8463-dbfb-4263-b474-d9c558263b20/stitched.png`.
-- **Segmentation**: Extracted 7 distinct manhwa panels with bounding boxes.
-- **Motion Comic Video**: Rendered alternating Ken Burns and 2.5D Parallax frames with cubic easing and alpha crossfade transitions.
-- **Output Artifacts**: Generated `baseline.avi` (5.6 MB), `baseline.webp` (2.2 MB), and `state.json` recording complete state progression from `INGEST` to `DONE`.
+The pipeline was executed and verified against the evaluation dataset (`data/eval/sample_page_*.png`):
+- **Stitching**: Concatenated 3 manhwa pages (`800x4800`) into `runs/396d8463-dbfb-4263-b474-d9c558263b20/stitched.png` with exact per-page Y-offset metadata.
+- **2D Panel Segmentation**: Extracted all 9 manhwa panels (including side-by-side panels 3 & 4 and wide panel 7) with **Precision = 1.0000**, **Recall = 1.0000**, **F1 = 1.0000**, and **Mean IoU = 0.9968**.
+- **Clean Plates, Routing, QC & TTS**: Generated 9 clean plates (`clean_plates/*.png`), 9 rendered clips (`clips/*.avi`), QC report (`qc/qc_report.json`), and 8 synthesized speech WAV tracks (`audio/*.wav`).
+- **Output Artifacts**: Generated `output/final_anime.mp4`, `baseline.mp4`, `baseline.avi`, `baseline.webp`, `output/subtitles.srt`, `output/timeline.json`, and `state.json` recording complete state progression from `INGEST` to `DONE`.
+- **Phase 0 & Phase 1 Flaw Audit (`[F1–F14]`)**: All 14 architectural and implementation flaws identified across Go (`internal/`) and Python (`workers/`, `src/m2a/`) have been documented in `Manhwa_to_Anime_Prototype_Proposal.pdf` (Section 5) and resolved in code.
