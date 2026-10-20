@@ -1,0 +1,5374 @@
+==> ./api/app.py <==
+"""FastAPI application for pipeline job management."""
+import logging
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uuid
+from typing import Dict
+
+logger = logging.getLogger(__name__)
+app = FastAPI(title="Manhwa-to-Anime API")
+
+# TODO: Implement actual Redis queue integration
+# redis_client = Redis()
+JOB_QUEUE: Dict[str, dict] = {}
+
+class JobSubmitRequest(BaseModel):
+    config: dict
+    compute_tier: str = "standard"
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    progress: float
+
+@app.post("/jobs", response_model=JobStatusResponse)
+async def submit_job(request: JobSubmitRequest):
+    """Submits a new pipeline job."""
+    job_id = str(uuid.uuid4())
+    logger.info(f"Submitting job {job_id}")
+    
+    # TODO: Push to Redis queue
+    job_data = {
+        "id": job_id,
+        "status": "queued",
+        "progress": 0.0,
+        "config": request.config,
+    }
+    JOB_QUEUE[job_id] = job_data
+    
+    return JobStatusResponse(job_id=job_id, status="queued", progress=0.0)
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Gets job status and progress."""
+    if job_id not in JOB_QUEUE:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    # TODO: Fetch from Redis
+    job_data = JOB_QUEUE[job_id]
+    return JobStatusResponse(
+        job_id=job_id, 
+        status=job_data["status"], 
+        progress=job_data["progress"]
+    )
+
+@app.get("/jobs/{job_id}/result")
+async def get_job_result(job_id: str):
+    """Downloads result MP4."""
+    if job_id not in JOB_QUEUE:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    # TODO: Return FileResponse for the generated video
+    return {"message": f"Result for {job_id} not implemented yet"}
+
+@app.delete("/jobs/{job_id}")
+async def cancel_job(job_id: str):
+    """Cancels a job."""
+    if job_id not in JOB_QUEUE:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    # TODO: Remove from Redis queue and kill worker process if running
+    JOB_QUEUE[job_id]["status"] = "cancelled"
+    return {"message": "Job cancelled"}
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "ok"}
+
+==> ./api/worker.py <==
+"""Worker process for processing pipeline jobs from Redis."""
+import time
+import logging
+import signal
+
+logger = logging.getLogger(__name__)
+
+class Worker:
+    def __init__(self):
+        self.running = True
+        # TODO: Initialize Redis connection
+        # self.redis = Redis(...)
+
+    def _handle_shutdown(self, sig, frame):
+        logger.info("Graceful shutdown initiated...")
+        self.running = False
+
+    def run(self):
+        signal.signal(signal.SIGINT, self._handle_shutdown)
+        signal.signal(signal.SIGTERM, self._handle_shutdown)
+        
+        logger.info("Worker started. Polling for jobs...")
+        
+        while self.running:
+            # TODO: Poll Redis for jobs (e.g. blpop)
+            # job = self.redis.blpop("m2a_queue", timeout=1)
+            job = None
+            
+            if job:
+                logger.info(f"Picked up job: {job}")
+                # 1. Update job status to 'running'
+                # 2. Run PipelineGraph
+                # 3. Update job status to 'completed' or 'failed'
+            
+            time.sleep(1) # Stub for polling interval
+            
+        logger.info("Worker stopped.")
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    worker = Worker()
+    worker.run()
+
+==> ./api/__init__.py <==
+"""API module for Manhwa-to-Anime."""
+
+==> ./configs/default.yaml <==
+# Manhwa-to-Anime Pipeline — Default Configuration
+# Override per compute tier in configs/tiers/
+
+general:
+  run_dir: "./runs"
+  log_level: "info"
+
+perception:
+  detector: "opencv"      # Primary: "opencv" gutter slicing. Alt: "magiv3"
+  fallback: "opencv"       # Fallback detector
+
+understanding:
+  vlm: "qwen3-vl-8b"
+  schema_version: 1
+
+cleanup:
+  inpainter: "lama"
+
+generation:
+  primary_model: "wan22-ti2v-5b"
+  fallback_models:
+    - "hunyuan15"
+    - "ltx23"
+  max_retries: 2
+  max_clip_duration_s: 5.0
+
+audio:
+  tts_primary: "melotts"    # Korean/multilingual
+  tts_fallback: "kokoro"     # Lightweight CPU fallback
+
+composition:
+  output_format: "mp4"
+  resolution: [720, 1280]    # 9:16 portrait
+  fps: 24
+  transition_type: "crossfade"
+
+qc:
+  identity_threshold: 0.85
+  flicker_threshold: 0.15
+  max_new_text_lines: 0
+
+# Worker server address (Python AI workers)
+worker:
+  host: "127.0.0.1"
+  port: 8100
+
+==> ./configs/models.yaml <==
+magiv3:
+  name: "Magi V3"
+  repo_id: "example/magiv3"
+  license: "Apache-2.0"
+  vram_gb: 4
+  quantization: null
+  notes: "Panel and text detection"
+
+qwen3-vl-8b:
+  name: "Qwen3-VL-8B"
+  repo_id: "Qwen/Qwen3-VL-8B-Instruct"
+  license: "Apache-2.0"
+  vram_gb: 16
+  quantization: null
+  notes: "VLM for structural understanding"
+
+qwen3-vl-8b-4bit:
+  name: "Qwen3-VL-8B (4-bit)"
+  repo_id: "Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4"
+  license: "Apache-2.0"
+  vram_gb: 8
+  quantization: "int4"
+  notes: "Quantized VLM"
+
+qwen3-vl-2b:
+  name: "Qwen3-VL-2B"
+  repo_id: "Qwen/Qwen3-VL-2B-Instruct"
+  license: "Apache-2.0"
+  vram_gb: 4
+  quantization: null
+  notes: "Small VLM for CPU tier"
+
+lama:
+  name: "LaMa"
+  repo_id: "advimman/lama"
+  license: "Apache-2.0"
+  vram_gb: 2
+  quantization: null
+  notes: "Inpainting model"
+
+wan22-ti2v-5b:
+  name: "Wan2.2-Ti2V-5B"
+  repo_id: "Wan-AI/Wan2.2-Ti2V-5B"
+  license: "Apache-2.0"
+  vram_gb: 12
+  quantization: null
+  notes: "Text/Image to Video model"
+
+wan22-i2v-a14b:
+  name: "Wan2.2-I2V-A14B"
+  repo_id: "Wan-AI/Wan2.2-I2V-A14B"
+  license: "Apache-2.0"
+  vram_gb: 24
+  quantization: null
+  notes: "High quality I2V model"
+
+hunyuan15:
+  name: "Hunyuan Video 1.5"
+  repo_id: "tencent/hunyuan15"
+  license: "Tencent"
+  vram_gb: 16
+  quantization: null
+  notes: "Fallback video generation"
+
+ltx23:
+  name: "LTX Video 2.3"
+  repo_id: "lightricks/ltx23"
+  license: "Apache-2.0"
+  vram_gb: 12
+  quantization: null
+  notes: "Alternative fallback video generation"
+
+chatterbox:
+  name: "Chatterbox TTS"
+  repo_id: "example/chatterbox"
+  license: "Apache-2.0"
+  vram_gb: 2
+  quantization: null
+  notes: "Primary TTS"
+
+kokoro:
+  name: "Kokoro TTS"
+  repo_id: "example/kokoro"
+  license: "Apache-2.0"
+  vram_gb: 1
+  quantization: null
+  notes: "Fallback TTS"
+
+depth-anything-v2:
+  name: "Depth Anything V2"
+  repo_id: "depth-anything/Depth-Anything-V2"
+  license: "Apache-2.0"
+  vram_gb: 4
+  quantization: null
+  notes: "Monocular depth estimation"
+
+real-esrgan-anime:
+  name: "Real-ESRGAN Anime"
+  repo_id: "xinntao/Real-ESRGAN"
+  license: "BSD-3-Clause"
+  vram_gb: 2
+  quantization: null
+  notes: "Anime video upscaling"
+
+rife:
+  name: "RIFE"
+  repo_id: "hzwer/ECCV2022-RIFE"
+  license: "MIT"
+  vram_gb: 2
+  quantization: null
+  notes: "Video frame interpolation"
+
+==> ./configs/tiers/t0.yaml <==
+# T0: CPU-only tier — no GPU available
+# Uses Ken Burns only, smallest VLM, no video generation
+generation:
+  primary_model: "kenburns"   # No AI video, only pan/zoom
+  fallback_models: []
+  max_retries: 0
+
+understanding:
+  vlm: "qwen3-vl-2b"
+
+audio:
+  tts_primary: "kokoro"      # CPU-friendly
+  tts_fallback: "edge-tts"
+
+==> ./configs/tiers/t1.yaml <==
+# T1: 12-16 GB GPU (e.g., RTX 4070, 3080)
+generation:
+  primary_model: "wan22-ti2v-5b"
+  fallback_models:
+    - "kenburns"
+  max_retries: 2
+
+understanding:
+  vlm: "qwen3-vl-8b-4bit"
+
+==> ./configs/tiers/t2.yaml <==
+# T2: 24-48 GB GPU (e.g., RTX 4090, A5000, rented cloud)
+generation:
+  primary_model: "wan22-i2v-a14b"
+  fallback_models:
+    - "wan22-ti2v-5b"
+    - "hunyuan15"
+  max_retries: 3
+
+understanding:
+  vlm: "qwen3-vl-8b"
+
+==> ./data/eval/generate_sample_pages.py <==
+"""Generate synthetic evaluation manhwa pages and ground truth annotations.
+
+Creates 3 vertical-scroll pages with realistic panels, gutters, dialogue bubbles,
+and characters, and writes data/eval/ground_truth.json following ground_truth_schema.json.
+"""
+import json
+from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
+import numpy as np
+
+OUTPUT_DIR = Path("data/eval")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# Colors (Anime / Manhwa aesthetic)
+BG_WHITE = (255, 255, 255)
+PANEL_BORDER = (20, 20, 24)
+BUBBLE_BG = (255, 255, 255)
+BUBBLE_BORDER = (40, 40, 45)
+TEXT_COLOR = (20, 20, 20)
+
+PALETTES = [
+    {"sky": (135, 206, 235), "ground": (76, 153, 0), "char": (220, 80, 60), "accent": (255, 200, 100)},
+    {"sky": (40, 30, 70), "ground": (25, 20, 45), "char": (90, 160, 240), "accent": (230, 80, 180)},
+    {"sky": (240, 180, 120), "ground": (160, 90, 50), "char": (60, 180, 120), "accent": (240, 220, 80)},
+]
+
+PAGE_SPECS = [
+    {
+        "page_file": "sample_page_1.png",
+        "width": 800,
+        "height": 2200,
+        "panels": [
+            {
+                "id": "p1_panel_1",
+                "bbox": {"x": 40, "y": 60, "w": 720, "h": 500},
+                "reading_order": 1,
+                "shot_type": "wide",
+                "action": "Jin stands before the towering Gates of Awakening at dawn.",
+                "dialogue": [
+                    {"text": "The gate opened... after three years.", "speaker": "Jin", "lang": "en", "emotion": "serious", "bbox": {"x": 70, "y": 90, "w": 300, "h": 70}}
+                ],
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "determined", "pose": "standing full body"}],
+                "palette_idx": 0,
+            },
+            {
+                "id": "p1_panel_2",
+                "bbox": {"x": 60, "y": 640, "w": 680, "h": 460},
+                "reading_order": 2,
+                "shot_type": "medium",
+                "action": "A mysterious shadow creature emerges from the swirling rift.",
+                "dialogue": [
+                    {"text": "GROOOOOWL!", "speaker": "Shadow Beast", "lang": "en", "emotion": "angry", "bbox": {"x": 450, "y": 670, "w": 250, "h": 60}}
+                ],
+                "characters": [{"id": "char_beast", "name": "Shadow Beast", "emotion": "hostile", "pose": "emerging"}],
+                "palette_idx": 1,
+            },
+            {
+                "id": "p1_panel_3",
+                "bbox": {"x": 50, "y": 1180, "w": 700, "h": 920},
+                "reading_order": 3,
+                "shot_type": "close_up",
+                "action": "Close-up of Jin's glowing blue eyes as his dagger ignites with mana.",
+                "dialogue": [
+                    {"text": "I won't run away this time.", "speaker": "Jin", "lang": "en", "emotion": "confident", "bbox": {"x": 80, "y": 1220, "w": 280, "h": 75}}
+                ],
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "intense", "pose": "eye close-up"}],
+                "palette_idx": 2,
+            },
+        ],
+    },
+    {
+        "page_file": "sample_page_2.png",
+        "width": 800,
+        "height": 2100,
+        "panels": [
+            {
+                "id": "p2_panel_1",
+                "bbox": {"x": 50, "y": 70, "w": 700, "h": 580},
+                "reading_order": 4,
+                "shot_type": "medium",
+                "action": "Jin dashes forward leaving a trail of blue light sparks.",
+                "dialogue": [
+                    {"text": "Shadow Step: First Form!", "speaker": "Jin", "lang": "en", "emotion": "focused", "bbox": {"x": 420, "y": 100, "w": 300, "h": 65}}
+                ],
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "action", "pose": "dashing"}],
+                "palette_idx": 1,
+            },
+            {
+                "id": "p2_panel_2",
+                "bbox": {"x": 40, "y": 730, "w": 720, "h": 620},
+                "reading_order": 5,
+                "shot_type": "splash",
+                "action": "Massive clash as the dagger slices through the beast's armored claw.",
+                "dialogue": [
+                    {"text": "CRASH!!", "speaker": "SFX", "lang": "en", "emotion": "impact", "bbox": {"x": 100, "y": 760, "w": 200, "h": 80}}
+                ],
+                "characters": [
+                    {"id": "char_jin", "name": "Jin", "emotion": "fierce", "pose": "slashing"},
+                    {"id": "char_beast", "name": "Shadow Beast", "emotion": "pain", "pose": "recoiling"},
+                ],
+                "palette_idx": 0,
+            },
+            {
+                "id": "p2_panel_3",
+                "bbox": {"x": 60, "y": 1430, "w": 680, "h": 580},
+                "reading_order": 6,
+                "shot_type": "medium",
+                "action": "The beast shatters into dark energy particles.",
+                "dialogue": [
+                    {"text": "Target eliminated. Quest complete.", "speaker": "System", "lang": "en", "emotion": "neutral", "bbox": {"x": 200, "y": 1470, "w": 380, "h": 60}}
+                ],
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "calm", "pose": "sheathing dagger"}],
+                "palette_idx": 2,
+            },
+        ],
+    },
+    {
+        "page_file": "sample_page_3.png",
+        "width": 800,
+        "height": 2000,
+        "panels": [
+            {
+                "id": "p3_panel_1",
+                "bbox": {"x": 50, "y": 60, "w": 700, "h": 520},
+                "reading_order": 7,
+                "shot_type": "close_up",
+                "action": "Jin catches his breath under the gentle morning light.",
+                "dialogue": [
+                    {"text": "Level up... plus three stats.", "speaker": "Jin", "lang": "en", "emotion": "relieved", "bbox": {"x": 80, "y": 90, "w": 280, "h": 65}}
+                ],
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "tired", "pose": "half face"}],
+                "palette_idx": 0,
+            },
+            {
+                "id": "p3_panel_2",
+                "bbox": {"x": 40, "y": 660, "w": 720, "h": 600},
+                "reading_order": 8,
+                "shot_type": "medium",
+                "action": "A mysterious girl in white armor watches him from the clifftop.",
+                "dialogue": [
+                    {"text": "Who is that hunter? I've never seen him in the guild.", "speaker": "Elora", "lang": "en", "emotion": "curious", "bbox": {"x": 380, "y": 700, "w": 340, "h": 75}}
+                ],
+                "characters": [{"id": "char_elora", "name": "Elora", "emotion": "curious", "pose": "observing from cliff"}],
+                "palette_idx": 1,
+            },
+            {
+                "id": "p3_panel_3",
+                "bbox": {"x": 50, "y": 1340, "w": 700, "h": 580},
+                "reading_order": 9,
+                "shot_type": "wide",
+                "action": "Establishing shot of the horizon showing the capital city in the distance.",
+                "dialogue": [
+                    {"text": "The next chapter begins now.", "speaker": "Narrator", "lang": "en", "emotion": "epic", "bbox": {"x": 100, "y": 1380, "w": 320, "h": 60}}
+                ],
+                "characters": [],
+                "palette_idx": 2,
+            },
+        ],
+    },
+]
+
+def draw_panel(draw: ImageDraw.ImageDraw, panel: dict):
+    bx = panel["bbox"]["x"]
+    by = panel["bbox"]["y"]
+    bw = panel["bbox"]["w"]
+    bh = panel["bbox"]["h"]
+    pal = PALETTES[panel["palette_idx"]]
+    
+    # Gradient / layered background inside panel
+    draw.rectangle([bx, by, bx + bw, by + bh], fill=pal["sky"])
+    ground_y = by + int(bh * 0.6)
+    draw.rectangle([bx, ground_y, bx + bw, by + bh], fill=pal["ground"])
+    
+    # Sun / Accent circle
+    accent_r = min(bw, bh) // 8
+    draw.ellipse([bx + bw - accent_r * 2 - 40, by + 30, bx + bw - 40, by + 30 + accent_r * 2], fill=pal["accent"])
+    
+    # Stylized Character shape
+    cx = bx + bw // 2
+    cy = ground_y - 40
+    cw = min(bw, bh) // 4
+    ch = min(bw, bh) // 3
+    draw.polygon([
+        (cx, cy - ch),
+        (cx - cw // 2, cy),
+        (cx + cw // 2, cy),
+    ], fill=pal["char"])
+    # Character head
+    head_r = cw // 4
+    draw.ellipse([cx - head_r, cy - ch - head_r * 2, cx + head_r, cy - ch], fill=(255, 220, 190))
+    
+    # Dark panel border (distinct outline)
+    draw.rectangle([bx, by, bx + bw, by + bh], outline=PANEL_BORDER, width=4)
+    
+    # Speech bubbles
+    for d in panel["dialogue"]:
+        db = d["bbox"]
+        dx, dy, dw, dh = db["x"], db["y"], db["w"], db["h"]
+        # Rounded speech bubble
+        draw.rounded_rectangle([dx, dy, dx + dw, dy + dh], radius=12, fill=BUBBLE_BG, outline=BUBBLE_BORDER, width=3)
+        # Tail pointer
+        draw.polygon([(dx + 20, dy + dh), (dx + 35, dy + dh), (dx + 15, dy + dh + 15)], fill=BUBBLE_BG, outline=BUBBLE_BORDER)
+        # Text label
+        draw.text((dx + 15, dy + 15), d["text"][:35], fill=TEXT_COLOR)
+
+def generate_all():
+    all_panels_for_gt = []
+    source_page_names = []
+    
+    for spec in PAGE_SPECS:
+        page_file = spec["page_file"]
+        source_page_names.append(page_file)
+        w, h = spec["width"], spec["height"]
+        
+        # White background (manhwa vertical gutter canvas)
+        img = Image.new("RGB", (w, h), BG_WHITE)
+        draw = ImageDraw.Draw(img)
+        
+        for p in spec["panels"]:
+            draw_panel(draw, p)
+            # Record for ground truth
+            gt_panel = {
+                "panel_id": p["id"],
+                "page": page_file,
+                "bbox": p["bbox"],
+                "reading_order": p["reading_order"],
+                "shot_type": p["shot_type"],
+                "action_description": p["action"],
+                "dialogue": [
+                    {
+                        "text": d["text"],
+                        "speaker": d["speaker"],
+                        "language": d["lang"],
+                        "emotion": d["emotion"],
+                        "bbox": d["bbox"],
+                    }
+                    for d in p["dialogue"]
+                ],
+                "characters": p["characters"],
+            }
+            all_panels_for_gt.append(gt_panel)
+            
+        img_path = OUTPUT_DIR / page_file
+        img.save(img_path, quality=95)
+        print(f"Generated {img_path} ({w}x{h}, {len(spec['panels'])} panels)")
+        
+    ground_truth = {
+        "source_pages": source_page_names,
+        "panels": all_panels_for_gt,
+        "characters": {
+            "char_jin": {
+                "name": "Jin",
+                "description": "Black-haired shadow hunter with glowing blue eyes.",
+                "appearances": ["p1_panel_1", "p1_panel_3", "p2_panel_1", "p2_panel_2", "p2_panel_3", "p3_panel_1"],
+            },
+            "char_beast": {
+                "name": "Shadow Beast",
+                "description": "Armored demonic beast with dark aura.",
+                "appearances": ["p1_panel_2", "p2_panel_2"],
+            },
+            "char_elora": {
+                "name": "Elora",
+                "description": "Guild scout in white armor.",
+                "appearances": ["p3_panel_2"],
+            },
+        },
+    }
+    
+    gt_path = OUTPUT_DIR / "ground_truth.json"
+    with open(gt_path, "w", encoding="utf-8") as f:
+        json.dump(ground_truth, f, indent=2)
+    print(f"Generated {gt_path} with {len(all_panels_for_gt)} total panels.")
+
+if __name__ == "__main__":
+    generate_all()
+
+==> ./data/eval/ground_truth.json <==
+{
+  "source_pages": [
+    "sample_page_1.png",
+    "sample_page_2.png",
+    "sample_page_3.png"
+  ],
+  "panels": [
+    {
+      "panel_id": "p1_panel_1",
+      "page": "sample_page_1.png",
+      "bbox": {
+        "x": 40,
+        "y": 60,
+        "w": 720,
+        "h": 500
+      },
+      "reading_order": 1,
+      "shot_type": "wide",
+      "action_description": "Jin stands before the towering Gates of Awakening at dawn.",
+      "dialogue": [
+        {
+          "text": "The gate opened... after three years.",
+          "speaker": "Jin",
+          "language": "en",
+          "emotion": "serious",
+          "bbox": {
+            "x": 70,
+            "y": 90,
+            "w": 300,
+            "h": 70
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "determined",
+          "pose": "standing full body"
+        }
+      ]
+    },
+    {
+      "panel_id": "p1_panel_2",
+      "page": "sample_page_1.png",
+      "bbox": {
+        "x": 60,
+        "y": 640,
+        "w": 680,
+        "h": 460
+      },
+      "reading_order": 2,
+      "shot_type": "medium",
+      "action_description": "A mysterious shadow creature emerges from the swirling rift.",
+      "dialogue": [
+        {
+          "text": "GROOOOOWL!",
+          "speaker": "Shadow Beast",
+          "language": "en",
+          "emotion": "angry",
+          "bbox": {
+            "x": 450,
+            "y": 670,
+            "w": 250,
+            "h": 60
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_beast",
+          "name": "Shadow Beast",
+          "emotion": "hostile",
+          "pose": "emerging"
+        }
+      ]
+    },
+    {
+      "panel_id": "p1_panel_3",
+      "page": "sample_page_1.png",
+      "bbox": {
+        "x": 50,
+        "y": 1180,
+        "w": 700,
+        "h": 920
+      },
+      "reading_order": 3,
+      "shot_type": "close_up",
+      "action_description": "Close-up of Jin's glowing blue eyes as his dagger ignites with mana.",
+      "dialogue": [
+        {
+          "text": "I won't run away this time.",
+          "speaker": "Jin",
+          "language": "en",
+          "emotion": "confident",
+          "bbox": {
+            "x": 80,
+            "y": 1220,
+            "w": 280,
+            "h": 75
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "intense",
+          "pose": "eye close-up"
+        }
+      ]
+    },
+    {
+      "panel_id": "p2_panel_1",
+      "page": "sample_page_2.png",
+      "bbox": {
+        "x": 50,
+        "y": 70,
+        "w": 700,
+        "h": 580
+      },
+      "reading_order": 4,
+      "shot_type": "medium",
+      "action_description": "Jin dashes forward leaving a trail of blue light sparks.",
+      "dialogue": [
+        {
+          "text": "Shadow Step: First Form!",
+          "speaker": "Jin",
+          "language": "en",
+          "emotion": "focused",
+          "bbox": {
+            "x": 420,
+            "y": 100,
+            "w": 300,
+            "h": 65
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "action",
+          "pose": "dashing"
+        }
+      ]
+    },
+    {
+      "panel_id": "p2_panel_2",
+      "page": "sample_page_2.png",
+      "bbox": {
+        "x": 40,
+        "y": 730,
+        "w": 720,
+        "h": 620
+      },
+      "reading_order": 5,
+      "shot_type": "splash",
+      "action_description": "Massive clash as the dagger slices through the beast's armored claw.",
+      "dialogue": [
+        {
+          "text": "CRASH!!",
+          "speaker": "SFX",
+          "language": "en",
+          "emotion": "impact",
+          "bbox": {
+            "x": 100,
+            "y": 760,
+            "w": 200,
+            "h": 80
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "fierce",
+          "pose": "slashing"
+        },
+        {
+          "id": "char_beast",
+          "name": "Shadow Beast",
+          "emotion": "pain",
+          "pose": "recoiling"
+        }
+      ]
+    },
+    {
+      "panel_id": "p2_panel_3",
+      "page": "sample_page_2.png",
+      "bbox": {
+        "x": 60,
+        "y": 1430,
+        "w": 680,
+        "h": 580
+      },
+      "reading_order": 6,
+      "shot_type": "medium",
+      "action_description": "The beast shatters into dark energy particles.",
+      "dialogue": [
+        {
+          "text": "Target eliminated. Quest complete.",
+          "speaker": "System",
+          "language": "en",
+          "emotion": "neutral",
+          "bbox": {
+            "x": 200,
+            "y": 1470,
+            "w": 380,
+            "h": 60
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "calm",
+          "pose": "sheathing dagger"
+        }
+      ]
+    },
+    {
+      "panel_id": "p3_panel_1",
+      "page": "sample_page_3.png",
+      "bbox": {
+        "x": 50,
+        "y": 60,
+        "w": 700,
+        "h": 520
+      },
+      "reading_order": 7,
+      "shot_type": "close_up",
+      "action_description": "Jin catches his breath under the gentle morning light.",
+      "dialogue": [
+        {
+          "text": "Level up... plus three stats.",
+          "speaker": "Jin",
+          "language": "en",
+          "emotion": "relieved",
+          "bbox": {
+            "x": 80,
+            "y": 90,
+            "w": 280,
+            "h": 65
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_jin",
+          "name": "Jin",
+          "emotion": "tired",
+          "pose": "half face"
+        }
+      ]
+    },
+    {
+      "panel_id": "p3_panel_2",
+      "page": "sample_page_3.png",
+      "bbox": {
+        "x": 40,
+        "y": 660,
+        "w": 720,
+        "h": 600
+      },
+      "reading_order": 8,
+      "shot_type": "medium",
+      "action_description": "A mysterious girl in white armor watches him from the clifftop.",
+      "dialogue": [
+        {
+          "text": "Who is that hunter? I've never seen him in the guild.",
+          "speaker": "Elora",
+          "language": "en",
+          "emotion": "curious",
+          "bbox": {
+            "x": 380,
+            "y": 700,
+            "w": 340,
+            "h": 75
+          }
+        }
+      ],
+      "characters": [
+        {
+          "id": "char_elora",
+          "name": "Elora",
+          "emotion": "curious",
+          "pose": "observing from cliff"
+        }
+      ]
+    },
+    {
+      "panel_id": "p3_panel_3",
+      "page": "sample_page_3.png",
+      "bbox": {
+        "x": 50,
+        "y": 1340,
+        "w": 700,
+        "h": 580
+      },
+      "reading_order": 9,
+      "shot_type": "wide",
+      "action_description": "Establishing shot of the horizon showing the capital city in the distance.",
+      "dialogue": [
+        {
+          "text": "The next chapter begins now.",
+          "speaker": "Narrator",
+          "language": "en",
+          "emotion": "epic",
+          "bbox": {
+            "x": 100,
+            "y": 1380,
+            "w": 320,
+            "h": 60
+          }
+        }
+      ],
+      "characters": []
+    }
+  ],
+  "characters": {
+    "char_jin": {
+      "name": "Jin",
+      "description": "Black-haired shadow hunter with glowing blue eyes.",
+      "appearances": [
+        "p1_panel_1",
+        "p1_panel_3",
+        "p2_panel_1",
+        "p2_panel_2",
+        "p2_panel_3",
+        "p3_panel_1"
+      ]
+    },
+    "char_beast": {
+      "name": "Shadow Beast",
+      "description": "Armored demonic beast with dark aura.",
+      "appearances": [
+        "p1_panel_2",
+        "p2_panel_2"
+      ]
+    },
+    "char_elora": {
+      "name": "Elora",
+      "description": "Guild scout in white armor.",
+      "appearances": [
+        "p3_panel_2"
+      ]
+    }
+  }
+}
+==> ./data/eval/ground_truth_schema.json <==
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manhwa Evaluation Ground Truth",
+  "description": "Hand-labeled ground truth for evaluating the perception and understanding pipeline.",
+  "type": "object",
+  "required": ["source_pages", "panels", "characters"],
+  "properties": {
+    "source_pages": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Filenames of the source manhwa pages used."
+    },
+    "panels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["panel_id", "bbox", "reading_order"],
+        "properties": {
+          "panel_id": { "type": "string" },
+          "bbox": {
+            "type": "object",
+            "required": ["x", "y", "w", "h"],
+            "properties": {
+              "x": { "type": "integer" },
+              "y": { "type": "integer" },
+              "w": { "type": "integer" },
+              "h": { "type": "integer" }
+            }
+          },
+          "reading_order": { "type": "integer" },
+          "shot_type": { "type": "string", "enum": ["close_up", "medium", "wide", "splash"] },
+          "dialogue": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["text", "speaker", "language"],
+              "properties": {
+                "text": { "type": "string" },
+                "speaker": { "type": "string" },
+                "language": { "type": "string" },
+                "emotion": { "type": "string" },
+                "bbox": {
+                  "type": "object",
+                  "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "w": { "type": "integer" },
+                    "h": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "characters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "name"],
+              "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "emotion": { "type": "string" },
+                "pose": { "type": "string" }
+              }
+            }
+          },
+          "action_description": { "type": "string" }
+        }
+      }
+    },
+    "characters": {
+      "type": "object",
+      "description": "Character ID to full character profile mapping.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "appearances": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
+
+==> ./generate_provider.py <==
+
+
+==> ./generate_providers.py <==
+import os
+from pathlib import Path
+
+BASE_DIR = Path(r"c:\hihry\Ani\manhwa2anime\src\m2a\providers")
+
+files = {}
+
+files["base.py"] = '''"""Base abstract classes for all providers."""
+import logging
+from abc import ABC, abstractmethod
+from pathlib import Path
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+class TextRegion(BaseModel):
+    """Represents a detected text region."""
+    text: str
+    bbox: List[int]
+    confidence: float
+    language: str
+
+class BBox(BaseModel):
+    """Bounding box coordinates."""
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+class CharacterDetection(BaseModel):
+    """Character detected in a panel."""
+    bbox: BBox
+    character_id: str
+    confidence: float
+
+class TextDetection(BaseModel):
+    """Text detection details."""
+    bbox: BBox
+    confidence: float
+
+class SpeakerLink(BaseModel):
+    """Links a text region to a character."""
+    text_bbox: BBox
+    character_bbox: BBox
+    confidence: float
+
+class VideoProvider(ABC):
+    """Abstract base class for video generation providers."""
+    @abstractmethod
+    def generate_clip(self, image: Path, prompt: str, duration_s: float, seed: int, **kwargs) -> Path:
+        """Generates a video clip from an image."""
+        pass
+
+    @abstractmethod
+    def estimate_vram_gb(self) -> float:
+        """Estimates VRAM usage in GB."""
+        pass
+
+    @abstractmethod
+    def model_name(self) -> str:
+        """Returns the model name."""
+        pass
+
+class VLMProvider(ABC):
+    """Abstract base class for Vision-Language Models."""
+    @abstractmethod
+    def analyze_panel(self, image: Path, schema: dict) -> dict:
+        """Analyzes a panel and returns structured data matching the schema."""
+        pass
+
+    @abstractmethod  
+    def ocr(self, image: Path, language: str) -> list[dict]:
+        """Performs OCR on an image."""
+        pass
+
+class OCRProvider(ABC):
+    """Abstract base class for OCR providers."""
+    @abstractmethod
+    def recognize(self, image: Path, language: str) -> list[TextRegion]:
+        """Recognizes text in an image."""
+        pass
+
+class TTSProvider(ABC):
+    """Abstract base class for Text-to-Speech providers."""
+    @abstractmethod
+    def synthesize(self, text: str, voice_id: str, emotion: str, output_path: Path) -> float:
+        """Synthesizes speech and returns duration."""
+        pass
+
+    @abstractmethod
+    def clone_voice(self, reference_audio: Path) -> str:
+        """Clones a voice and returns a voice_id."""
+        pass
+
+class InpaintProvider(ABC):
+    """Abstract base class for inpainting providers."""
+    @abstractmethod
+    def inpaint(self, image: Path, mask: Path, output: Path) -> Path:
+        """Inpaints an image using a mask."""
+        pass
+
+class PerceptionProvider(ABC):
+    """Abstract base class for perception providers."""
+    @abstractmethod
+    def detect_panels(self, image: Path) -> list[BBox]:
+        """Detects panels in an image."""
+        pass
+
+    @abstractmethod
+    def detect_characters(self, image: Path, panels: list[BBox]) -> list[CharacterDetection]:
+        """Detects characters within panels."""
+        pass
+
+    @abstractmethod
+    def detect_text(self, image: Path) -> list[TextDetection]:
+        """Detects text regions."""
+        pass
+
+    @abstractmethod
+    def link_speakers(self, image: Path, text_regions: list[TextDetection], characters: list[CharacterDetection]) -> list[SpeakerLink]:
+        """Links detected text to characters."""
+        pass
+'''
+
+files["__init__.py"] = '''"""Provider registry and exports."""
+import logging
+from typing import Type
+
+from .base import (
+    VideoProvider, VLMProvider, OCRProvider, TTSProvider, InpaintProvider, PerceptionProvider
+)
+
+logger = logging.getLogger(__name__)
+
+# Registries
+_VIDEO_PROVIDERS: dict[str, Type[VideoProvider]] = {}
+_VLM_PROVIDERS: dict[str, Type[VLMProvider]] = {}
+_OCR_PROVIDERS: dict[str, Type[OCRProvider]] = {}
+_TTS_PROVIDERS: dict[str, Type[TTSProvider]] = {}
+_INPAINT_PROVIDERS: dict[str, Type[InpaintProvider]] = {}
+_PERCEPTION_PROVIDERS: dict[str, Type[PerceptionProvider]] = {}
+
+def get_video_provider(name: str, **kwargs) -> VideoProvider:
+    if name not in _VIDEO_PROVIDERS:
+        raise ValueError(f"VideoProvider '{name}' not found.")
+    return _VIDEO_PROVIDERS[name](**kwargs)
+
+def get_vlm_provider(name: str, **kwargs) -> VLMProvider:
+    if name not in _VLM_PROVIDERS:
+        raise ValueError(f"VLMProvider '{name}' not found.")
+    return _VLM_PROVIDERS[name](**kwargs)
+
+def get_ocr_provider(name: str, **kwargs) -> OCRProvider:
+    if name not in _OCR_PROVIDERS:
+        raise ValueError(f"OCRProvider '{name}' not found.")
+    return _OCR_PROVIDERS[name](**kwargs)
+
+def get_tts_provider(name: str, **kwargs) -> TTSProvider:
+    if name not in _TTS_PROVIDERS:
+        raise ValueError(f"TTSProvider '{name}' not found.")
+    return _TTS_PROVIDERS[name](**kwargs)
+
+def get_inpainter(name: str, **kwargs) -> InpaintProvider:
+    if name not in _INPAINT_PROVIDERS:
+        raise ValueError(f"InpaintProvider '{name}' not found.")
+    return _INPAINT_PROVIDERS[name](**kwargs)
+
+def get_perception_provider(name: str, **kwargs) -> PerceptionProvider:
+    if name not in _PERCEPTION_PROVIDERS:
+        raise ValueError(f"PerceptionProvider '{name}' not found.")
+    return _PERCEPTION_PROVIDERS[name](**kwargs)
+
+# TODO: Import and register providers here as they are implemented.
+# e.g. from .video.wan22 import Wan22Provider
+'''
+
+files["video/__init__.py"] = '''"""Video providers."""
+'''
+
+files["video/wan22.py"] = '''"""Wan 2.2 Video Provider via ComfyUI."""
+import logging
+import time
+import httpx
+from pathlib import Path
+from typing import Any
+
+from ..base import VideoProvider
+
+logger = logging.getLogger(__name__)
+
+class Wan22Provider(VideoProvider):
+    """Wan 2.2 video provider using ComfyUI API."""
+    def __init__(self, api_url: str = "http://localhost:8188", variant: str = "TI2V-5B"):
+        self.api_url = api_url
+        self.variant = variant
+        logger.info(f"Initialized Wan22Provider ({self.variant}) at {self.api_url}")
+
+    def generate_clip(self, image: Path, prompt: str, duration_s: float, seed: int, **kwargs) -> Path:
+        logger.info(f"Generating clip with seed {seed}, duration {duration_s}s")
+        start_time = time.time()
+        
+        # TODO: Construct ComfyUI workflow JSON here
+        workflow = {"prompt": prompt, "seed": seed, "image_path": str(image)}
+        
+        try:
+            # TODO: Replace with real ComfyUI prompt submission
+            # response = httpx.post(f"{self.api_url}/prompt", json={"prompt": workflow})
+            # response.raise_for_status()
+            pass
+        except Exception as e:
+            logger.error(f"Failed to submit to ComfyUI: {e}")
+            raise
+            
+        # TODO: Poll for result and download
+        output_path = Path(f"output_wan22_{seed}.mp4")
+        
+        gpu_seconds = time.time() - start_time
+        logger.info(f"Generation completed in {gpu_seconds:.2f}s GPU time.")
+        return output_path
+
+    def estimate_vram_gb(self) -> float:
+        return 16.0 if "5B" in self.variant else 24.0
+
+    def model_name(self) -> str:
+        return f"Wan2.2-{self.variant}"
+'''
+
+files["video/hunyuan15.py"] = '''"""HunyuanVideo 1.5 Video Provider."""
+import logging
+import time
+import httpx
+from pathlib import Path
+
+from ..base import VideoProvider
+
+logger = logging.getLogger(__name__)
+
+class Hunyuan15Provider(VideoProvider):
+    """HunyuanVideo 1.5 provider."""
+    def __init__(self, api_url: str = "http://localhost:8188"):
+        self.api_url = api_url
+        logger.info(f"Initialized Hunyuan15Provider at {self.api_url}")
+
+    def generate_clip(self, image: Path, prompt: str, duration_s: float, seed: int, **kwargs) -> Path:
+        logger.info(f"Generating Hunyuan clip with seed {seed}")
+        start_time = time.time()
+        
+        # TODO: Implement ComfyUI workflow submission and polling
+        output_path = Path(f"output_hunyuan_{seed}.mp4")
+        
+        gpu_seconds = time.time() - start_time
+        logger.info(f"Hunyuan generation used {gpu_seconds:.2f}s GPU time.")
+        return output_path
+
+    def estimate_vram_gb(self) -> float:
+        return 20.0
+
+    def model_name(self) -> str:
+        return "HunyuanVideo-1.5"
+'''
+
+files["video/ltx23.py"] = '''"""LTX-2.3 Video Provider."""
+import logging
+import time
+from pathlib import Path
+
+from ..base import VideoProvider
+
+logger = logging.getLogger(__name__)
+
+class LTX23Provider(VideoProvider):
+    """LTX-2.3 provider."""
+    def __init__(self, api_url: str = "http://localhost:8188"):
+        self.api_url = api_url
+        logger.info("Initialized LTX23Provider")
+
+    def generate_clip(self, image: Path, prompt: str, duration_s: float, seed: int, **kwargs) -> Path:
+        start_time = time.time()
+        # TODO: Implement LTX-2.3 generation logic
+        output_path = Path(f"output_ltx_{seed}.mp4")
+        gpu_seconds = time.time() - start_time
+        logger.info(f"LTX-2.3 GPU seconds: {gpu_seconds:.2f}s")
+        return output_path
+
+    def estimate_vram_gb(self) -> float:
+        return 12.0
+
+    def model_name(self) -> str:
+        return "LTX-2.3"
+'''
+
+files["vlm/__init__.py"] = '''"""VLM providers."""
+'''
+
+files["vlm/qwen3vl.py"] = '''"""Qwen3-VL VLM Provider."""
+import logging
+import time
+from pathlib import Path
+
+from ..base import VLMProvider
+
+logger = logging.getLogger(__name__)
+
+class Qwen3VLProvider(VLMProvider):
+    """Qwen3-VL Vision-Language Model provider."""
+    def __init__(self, endpoint: str = "http://localhost:8000/v1"):
+        self.endpoint = endpoint
+        logger.info(f"Initialized Qwen3VLProvider connected to {endpoint}")
+
+    def analyze_panel(self, image: Path, schema: dict) -> dict:
+        """Analyzes scene understanding and constraints output to schema."""
+        start_time = time.time()
+        prompt_template = (
+            "Analyze this panel and provide structured output matching the given schema.\\n"
+            "Include visual details, emotions, and background setting.\\n"
+            f"Schema: {schema}"
+        )
+        logger.info(f"Analyzing panel {image.name}")
+        # TODO: Implement vLLM/Ollama API call with schema constraint
+        result = {}
+        gpu_seconds = time.time() - start_time
+        logger.debug(f"Panel analysis took {gpu_seconds:.2f}s")
+        return result
+
+    def ocr(self, image: Path, language: str) -> list[dict]:
+        """Runs OCR using Qwen3-VL."""
+        start_time = time.time()
+        logger.info(f"Running Qwen3-VL OCR on {image.name}")
+        # TODO: Call VLM specifically for OCR tasks
+        result = []
+        gpu_seconds = time.time() - start_time
+        logger.debug(f"OCR took {gpu_seconds:.2f}s")
+        return result
+'''
+
+files["ocr/__init__.py"] = '''"""OCR providers."""
+'''
+
+files["ocr/qwen_ocr.py"] = '''"""Qwen OCR Provider delegating to VLM."""
+import logging
+from pathlib import Path
+from typing import List
+
+from ..base import OCRProvider, TextRegion
+from ..vlm.qwen3vl import Qwen3VLProvider
+
+logger = logging.getLogger(__name__)
+
+class QwenOCRProvider(OCRProvider):
+    """Delegates to Qwen3VLProvider for OCR."""
+    def __init__(self, vlm_provider: Qwen3VLProvider):
+        self.vlm = vlm_provider
+        logger.info("Initialized QwenOCRProvider")
+
+    def recognize(self, image: Path, language: str) -> List[TextRegion]:
+        logger.info(f"Delegating OCR for {image.name} to Qwen3VL")
+        raw_results = self.vlm.ocr(image, language)
+        # TODO: map raw_results to TextRegion
+        return []
+'''
+
+files["ocr/manga_ocr.py"] = '''"""Manga OCR Provider."""
+import logging
+import time
+from pathlib import Path
+from typing import List
+
+from ..base import OCRProvider, TextRegion
+
+logger = logging.getLogger(__name__)
+
+class MangaOCRProvider(OCRProvider):
+    """Manga OCR for Japanese text."""
+    def __init__(self):
+        logger.info("Loading MangaOCR model...")
+        # TODO: Import manga_ocr and load model
+        self.model = None
+
+    def recognize(self, image: Path, language: str) -> List[TextRegion]:
+        if language not in ("ja", "japanese"):
+            logger.warning(f"MangaOCR is Japanese-only, requested {language}")
+            
+        start_time = time.time()
+        # TODO: Implement MangaOCR recognition
+        results = []
+        gpu_seconds = time.time() - start_time
+        logger.info(f"MangaOCR processing took {gpu_seconds:.2f}s")
+        return results
+'''
+
+files["ocr/paddle_ocr.py"] = '''"""PaddleOCR Provider."""
+import logging
+import time
+from pathlib import Path
+from typing import List
+
+from ..base import OCRProvider, TextRegion
+
+logger = logging.getLogger(__name__)
+
+class PaddleOCRProvider(OCRProvider):
+    """PaddleOCR supporting KR/JA/EN."""
+    def __init__(self, use_gpu: bool = True):
+        logger.info(f"Initializing PaddleOCR (GPU={use_gpu})")
+        # TODO: Initialize PaddleOCR instance
+        self.ocr = None
+
+    def recognize(self, image: Path, language: str) -> List[TextRegion]:
+        start_time = time.time()
+        # TODO: Map language to paddleocr lang code, run recognition
+        results = []
+        gpu_seconds = time.time() - start_time
+        logger.info(f"PaddleOCR processing took {gpu_seconds:.2f}s")
+        return results
+'''
+
+files["tts/__init__.py"] = '''"""TTS providers."""
+'''
+
+files["tts/chatterbox.py"] = '''"""Chatterbox TTS Provider."""
+import logging
+import time
+from pathlib import Path
+
+from ..base import TTSProvider
+
+logger = logging.getLogger(__name__)
+
+class ChatterboxProvider(TTSProvider):
+    """Zero-shot voice cloning and emotion-aware TTS."""
+    def __init__(self):
+        logger.info("Loading Chatterbox model...")
+        # TODO: Load Chatterbox models and vocoders
+        self.model = None
+
+    def synthesize(self, text: str, voice_id: str, emotion: str, output_path: Path) -> float:
+        logger.info(f"Synthesizing text with emotion '{emotion}'")
+        start_time = time.time()
+        # TODO: Run TTS generation
+        duration = 0.0
+        gpu_seconds = time.time() - start_time
+        logger.info(f"TTS generated in {gpu_seconds:.2f}s")
+        return duration
+
+    def clone_voice(self, reference_audio: Path) -> str:
+        logger.info(f"Cloning voice from {reference_audio.name}")
+        # TODO: Extract voice embedding
+        return "cloned_voice_id"
+'''
+
+files["tts/kokoro.py"] = '''"""Kokoro TTS Provider."""
+import logging
+import time
+from pathlib import Path
+
+from ..base import TTSProvider
+
+logger = logging.getLogger(__name__)
+
+class KokoroProvider(TTSProvider):
+    """Lightweight TTS provider with CPU fallback."""
+    def __init__(self, use_gpu: bool = False):
+        self.use_gpu = use_gpu
+        logger.info(f"Initializing Kokoro TTS (GPU={use_gpu})")
+        # TODO: Load Kokoro voices mapping and model
+
+    def synthesize(self, text: str, voice_id: str, emotion: str, output_path: Path) -> float:
+        start_time = time.time()
+        # TODO: Implement Kokoro synthesis
+        duration = 0.0
+        elapsed = time.time() - start_time
+        logger.info(f"Kokoro synthesis took {elapsed:.2f}s")
+        return duration
+
+    def clone_voice(self, reference_audio: Path) -> str:
+        logger.warning("Kokoro TTS does not support zero-shot cloning. Returning default.")
+        return "default_kokoro_voice"
+'''
+
+files["perception/__init__.py"] = '''"""Perception providers."""
+'''
+
+files["perception/magiv3.py"] = '''"""Magiv3 Perception Provider."""
+import logging
+import time
+from pathlib import Path
+from typing import List
+
+from ..base import PerceptionProvider, BBox, CharacterDetection, TextDetection, SpeakerLink
+
+logger = logging.getLogger(__name__)
+
+class Magiv3Provider(PerceptionProvider):
+    """Panel, text, character detection and speaker linking."""
+    def __init__(self):
+        logger.info("Initializing Magiv3 models...")
+        # TODO: Load Magiv3 weights
+
+    def detect_panels(self, image: Path) -> List[BBox]:
+        start_time = time.time()
+        # TODO: Run panel detection
+        results = []
+        logger.debug(f"Panel detection: {time.time() - start_time:.2f}s")
+        return results
+
+    def detect_characters(self, image: Path, panels: List[BBox]) -> List[CharacterDetection]:
+        # TODO: Run character detection and clustering
+        return []
+
+    def detect_text(self, image: Path) -> List[TextDetection]:
+        # TODO: Run text detection
+        return []
+
+    def link_speakers(self, image: Path, text_regions: List[TextDetection], characters: List[CharacterDetection]) -> List[SpeakerLink]:
+        # TODO: Implement speech-bubble tail linking
+        return []
+'''
+
+files["inpaint/__init__.py"] = '''"""Inpainting providers."""
+'''
+
+files["inpaint/lama.py"] = '''"""LaMa Inpainting Provider."""
+import logging
+import time
+from pathlib import Path
+
+from ..base import InpaintProvider
+
+logger = logging.getLogger(__name__)
+
+class LaMaProvider(InpaintProvider):
+    """LaMa text mask inpainting provider."""
+    def __init__(self, use_gpu: bool = True):
+        logger.info(f"Initializing LaMa model (GPU={use_gpu})...")
+        # TODO: Load LaMa model
+
+    def inpaint(self, image: Path, mask: Path, output: Path) -> Path:
+        start_time = time.time()
+        logger.info(f"Inpainting {image.name}")
+        # TODO: Execute inpainting
+        gpu_seconds = time.time() - start_time
+        logger.info(f"Inpainting completed in {gpu_seconds:.2f}s")
+        return output
+'''
+
+def main():
+    for rel_path, content in files.items():
+        full_path = BASE_DIR / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"Created: {full_path}")
+
+if __name__ == "__main__":
+    main()
+    print("This is himanshu Just testing it output")
+
+==> ./pyproject.toml <==
+[project]
+name = "manhwa2anime"
+version = "0.1.0"
+description = "Manhwa-to-Anime AI pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+    "fastapi",
+    "uvicorn",
+    "redis",
+    "pillow",
+    "opencv-python-headless",
+    "numpy",
+    "torch",
+    "ffmpeg-python",
+    "pyyaml",
+    "httpx",
+    "rich",
+    "typer"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+ui = ["streamlit"]
+comfyui = ["comfyui-api"]
+
+[project.scripts]
+m2a = "m2a.cli:app"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+==> ./README.md <==
+# Manhwa → Anime (M2A)
+
+Manhwa → Anime (M2A) is an end-to-end multimodal pipeline that transforms static manhwa webtoon strips into fully animated anime video sequences with synthesized voice acting, background music, and dynamic motion. Built with a high-performance Go orchestrator and a modular Python AI worker backend, M2A automates panel segmentation, visual narrative understanding via Vision-Language Models (VLMs), speech bubble inpainting, AI video generation, text-to-speech audio synthesis, and final video composition.
+
+## Architecture
+
+The system uses a hybrid architecture: a compiled Go orchestrator manages the pipeline lifecycle, state machine, file artifacts, and quality checks, delegating heavyweight AI inference tasks over HTTP to a lightweight FastAPI worker server.
+
+```text
++-----------------------------------------------------------------------------+
+|                               Input Manhwa Strip                            |
++-----------------------------------------------------------------------------+
+                                       |
+                                       v
++-----------------------------------------------------------------------------+
+|                            Go Backend Orchestrator                          |
+|  - CLI Interface & Config Loader (default.yaml + compute tiers)             |
+|  - DAG Stage Execution & Artifact Pipeline Management                       |
+|  - Quality Control (QC) Gates & Validation Checks                           |
++-----------------------------------------------------------------------------+
+          |                      ^                      |
+          | HTTP Request         | JSON Response        | Composition
+          v                      |                      v
++----------------------------------+          +-------------------------------+
+|     Python AI Worker Server      |          |       FFmpeg Video Engine     |
+|         (FastAPI :8100)          |          |  - Video stitching & crossfade|
++----------------------------------+          |  - Dialogue audio mixing      |
+| /segment     OpenCV / MagiV3     |          |  - Subtitles & visual effects |
+| /understand  Qwen3-VL VLM        |          +-------------------------------+
+| /inpaint     LaMa inpainting     |                          |
+| /tts         MeloTTS / Kokoro    |                          v
++----------------------------------+          +-------------------------------+
+                                              |       Final Anime Video       |
+                                              |        (.mp4, 9:16)           |
+                                              +-------------------------------+
+```
+
+### Pipeline Stages
+1. **Perception**: Detects panel bounding boxes and gutters using OpenCV slicing or MagiV3.
+2. **Understanding**: Uses Vision-Language Models (e.g. Qwen3-VL) to extract scene descriptions, shot framing, camera motion prompts, and dialogue lines.
+3. **Cleanup**: Identifies speech bubbles and inpaints background artwork using LaMa.
+4. **Generation**: Synthesizes video clips via Image-to-Video models (Wan2.2, HunyuanVideo, Ken Burns) and generates dialogue audio with TTS (MeloTTS, Kokoro).
+5. **Composition**: Combines animated video clips, audio tracks, and transitions into a coherent vertical anime video.
+6. **Quality Control (QC)**: Validates character consistency, flicker thresholds, and text leakage before delivery.
+
+## Quick Start
+
+### Prerequisites
+- [Go 1.26+](https://go.dev/)
+- [Python 3.10+](https://www.python.org/)
+- [FFmpeg](https://ffmpeg.org/) (installed and available in `PATH`)
+
+### 1. Install Worker Dependencies
+```bash
+make worker-install
+```
+Or manually:
+```bash
+cd workers
+pip install -r requirements.txt
+cd ..
+```
+
+### 2. Start the Python AI Worker Server
+```bash
+make worker
+```
+The FastAPI worker server will start listening at `http://127.0.0.1:8100`.
+
+### 3. Build & Run the Go Orchestrator
+In a separate terminal:
+```bash
+# Build binary
+make build
+
+# Run pipeline on a sample manhwa image with Tier 1 profile
+./m2a.exe run --pages sample.png --tier t1
+```
+
+## Project Structure
+
+```text
+c:\hihry\Ani\
+├── cmd\
+│   └── m2a\                 # Main Go CLI entrypoint
+├── internal\                # Go backend internal packages
+│   ├── config\              # Configuration parsing and tier overlays
+│   ├── pipeline\            # Execution engine and DAG orchestration
+│   ├── client\              # HTTP client for Python AI worker API
+│   ├── models\              # Shared Go data structures
+│   └── qc\                  # Quality control evaluators
+├── workers\                 # Python AI worker microservice
+│   ├── __init__.py
+│   ├── server.py            # FastAPI service exposing AI inference endpoints
+│   └── requirements.txt     # Python ML and API dependencies
+├── configs\                 # YAML configuration profiles
+│   ├── default.yaml         # Base pipeline configuration
+│   └── tiers\               # Hardware tier overrides (T0, T1, T2)
+│       ├── t0.yaml
+│       ├── t1.yaml
+│       └── t2.yaml
+├── data\                    # Dataset and evaluation assets
+│   └── eval\                # Ground truth schemas and benchmark annotations
+│       └── ground_truth_schema.json
+├── Makefile                 # Automation targets for build, test, and worker
+├── .gitignore               # Ignored build artifacts, models, and virtual environments
+└── README.md                # Project documentation
+```
+
+## Compute Tiers
+
+M2A provides configurable tiers to match local or cloud GPU compute:
+
+| Tier | Hardware Target | Video Generation Model | Vision-Language Model (VLM) | TTS Audio Engine |
+| :--- | :--- | :--- | :--- | :--- |
+| **T0** | CPU Only (No GPU) | Ken Burns Pan/Zoom (rule-based) | Qwen3-VL-2B | Kokoro / Edge-TTS |
+| **T1** | 12–16 GB VRAM (RTX 3080/4070) | Wan2.2-Ti2V-5B (fallback: Ken Burns) | Qwen3-VL-8B (4-bit quantized) | MeloTTS (fallback: Kokoro) |
+| **T2** | 24–48 GB VRAM (RTX 4090/A5000/Cloud) | Wan2.2-I2V-A14B (fallback: Wan2.2-Ti2V-5B, Hunyuan1.5) | Qwen3-VL-8B | MeloTTS (fallback: Kokoro) |
+
+## License
+
+This project is licensed under the Apache 2.0 License. See the LICENSE file for details.
+
+==> ./report.md <==
+# 🎬 Manhwa → Anime Prototype Proposal — Deep Analysis Report
+
+> **Analyzed document**: [Manhwa_to_Anime_Prototype_Proposal.pdf](file:///c:/hihry/Ani/Manhwa_to_Anime_Prototype_Proposal.pdf)  
+> **Analysis date**: 6 October 2026  
+> **Version analyzed**: v0.1 (draft for review)
+
+---
+
+## 1. Understanding the Idea
+
+### What You're Building
+An **open-source AI pipeline** that takes 2–3 pages of a **manhwa** (Korean vertical-scroll comic) and converts them into a **15–40 second anime-style animated clip** with voices, subtitles, and proper storytelling.
+
+### The Pipeline in Plain English
+```
+Manhwa Pages → Panel Detection → Text/Character Recognition → Scene Understanding
+    → Text Removal → Video Generation → Voice Acting → Final Video Assembly
+```
+
+### Key Innovation
+The proposal is **hybrid by design** — it doesn't naively throw everything at AI video generation. Instead, it uses a **shot routing system**:
+- **Hero panels** (action, close-ups, key story beats) → AI image-to-video generation
+- **Subtle panels** (dialogue, atmosphere) → 2.5D parallax effect
+- **Static panels** (establishing shots) → Ken Burns pan/zoom
+
+This is the **correct approach**. Current AI video models produce artifacts on stylized art, so minimizing their use to only high-impact moments is smart.
+
+### Why This Matters
+There is virtually **no open-source tooling** that does this end-to-end today:
+- **ACMP** (the closest project) has 0 stars, 18 commits, no audio, no dialogue
+- **anime-pipeline** starts from text (not existing art) and uses paid APIs
+- Commercial tools (Frameo, etc.) are closed-source
+
+This is a genuine gap in the open-source ecosystem.
+
+---
+
+## 2. Market & Landscape Research
+
+### Existing Projects (Verified)
+
+| Project | Status | Relevance | Limitation |
+|---------|--------|-----------|------------|
+| [ACMP](https://github.com/vc-tr/acmp) | Tiny hobby project (0 stars, 18 commits) | End-to-end skeleton, Ken Burns fallback | No dialogue, no audio, untested detector |
+| [anime-pipeline](https://github.com/tongli-2026/anime-pipeline) | Small project (1 star) | Checkpointed state, character locking, budget router | Starts from text, not art; relies on paid APIs |
+| [Magi/Magiv2/Magiv3](https://github.com/ragavsachdeva/magi) | Active research (best comic perception) | Panel/text/character detection, speaker attribution | Trained on **manga**, not verified on color manhwa |
+| StoryDiffusion | Research | Consistent character generation across frames | Image generation, not video; different use case |
+
+### Commercial Landscape
+- **Frameo** and similar tools: Closed, not inspectable
+- **Manual workflows** (Luma/Kling on individual panels): Per-panel manual effort, closed models
+- **Dashtoon**, **ToonCrafter**: Adjacent but different problem spaces
+
+> [!IMPORTANT]
+> **Your proposal correctly identifies the market gap.** No existing project combines: (a) starting from existing comic art, (b) open-source only, (c) end-to-end with audio, and (d) intelligent shot routing. This is worth building.
+
+---
+
+## 3. Best Approaches & Identified Issues
+
+### ✅ What the Proposal Gets Right
+
+1. **Hybrid routing strategy** — The hero/subtle/static routing is the single most important design decision and it's correct. AI video on every panel would produce unwatchable results.
+
+2. **Clean-plate approach** — Removing text before video generation is essential. Video models garble text, and this is well-known.
+
+3. **Fallback chains everywhere** — Every expensive operation degrades gracefully to a cheaper alternative. A run never fails.
+
+4. **Human checkpoints** — CP1 (after understanding) and CP2 (after routing) are placed at exactly the right points.
+
+5. **Phase 3 bake-off** — Testing models with evidence instead of leaderboards is the right engineering approach.
+
+6. **Content-hash caching** — Idempotent stages with hash-keyed caching is essential for iterative development.
+
+7. **Compute tiers** — Defining T0/T1/T2/T3 upfront is practical.
+
+### ⚠️ Issues, Mistakes & Gaps Found
+
+#### Issue 1: Magiv3 on Manhwa — THE #1 Risk
+> [!CAUTION]
+> **Magiv3 was trained on manga (black-and-white, right-to-left, page-based layout).** Manhwa is fundamentally different: full color, vertical scroll, left-to-right reading order, often borderless panels with overlapping art. The proposal acknowledges this but **underestimates the risk**.
+
+**Evidence**: Magiv3's paper (arXiv 2503.23344) describes training data as manga pages. There are no reported evaluations on Korean webtoon/manhwa format. The panel detection, character clustering, and speech-bubble tail linking all assume manga conventions.
+
+**Recommendation**: 
+- Run Magiv3 on 5+ manhwa pages **immediately** in Phase 0 (not "one page smoke test")
+- Prepare a **dedicated manhwa panel detector** as a real fallback (not just OpenCV gutter slicing)
+- Consider fine-tuning Magiv3 on a small manhwa dataset (20-50 annotated pages)
+- Look into [kumiko](https://github.com/njean42/kumiko) for panel detection as an additional option
+
+#### Issue 2: Korean TTS is a Weak Spot
+> [!WARNING]
+> **Neither Chatterbox nor Kokoro supports Korean well.** Chatterbox is primarily English-focused with zero-shot cloning. Kokoro supports 8 languages but Korean support quality is unverified.
+
+**Research findings**:
+- **Chatterbox** (Resemble AI): MIT license ✓, excellent zero-shot voice cloning from ~5s of audio, but language support is primarily English. Japanese/Korean quality is uncertain.
+- **Kokoro**: Apache 2.0 ✓, 82M params, CPU-capable, 54 pre-built voices, 8 languages. Lightweight but not designed for voice cloning.
+- **Qwen3-TTS**: Supports 10 languages including Japanese and Korean. However, **license status is unverified** and availability needs confirmation.
+
+**Recommendation**: 
+- Add **Edge-TTS** (Microsoft, free API) as a quick prototype fallback for Korean/Japanese
+- Prioritize Qwen3-TTS verification in Phase 0
+- Consider **StyleTTS2** for higher quality English narration
+- For Korean specifically, investigate **MeloTTS** (MIT, supports Korean)
+
+#### Issue 3: Video Model Character Consistency — Understated
+> [!WARNING]
+> The proposal rates P5 (character consistency) as "High" risk but the mitigation ("condition on original panel pixels; short clips; identity-similarity QC") is insufficient.
+
+**Reality**: Current image-to-video models fundamentally don't have cross-clip memory. Even conditioning on source pixels, face/hair/outfit details drift significantly within 3-5 second clips. The identity-similarity QC will catch failures but won't fix them.
+
+**Missing approaches**:
+- **IP-Adapter** for video models: Inject character identity embeddings during generation
+- **Reference-only ControlNet**: Feed character reference images as conditioning
+- **ConsistI2V** and similar consistency-focused models
+- **Frame interpolation** between panels (FILM, RIFE) as an alternative to full I2V for some shots
+- Consider **Wan 2.2 VACE** (Video Anything Creation Engine) which supports more controllable generation
+
+#### Issue 4: No Depth-of-Field or Camera Motion Planning
+The proposal mentions "motion_prompt" in the panel JSON (e.g., "slow push-in, hair sways, dust drifts") but there's no systematic camera motion planning system.
+
+**Recommendation**: Add a **camera motion taxonomy** to the shot router:
+- Map shot types to default camera behaviors (close-up → subtle zoom, wide → slow pan, action → dynamic track)
+- Use depth maps to guide parallax intensity
+- Add speed/easing curves per shot type
+
+#### Issue 5: Timeline Pacing is Under-Specified
+The proposal says "durations from dialogue length" but pacing is much more than that:
+- Dramatic pauses after reveals
+- Beat timing for comedy
+- Action sequence acceleration
+- Scene-to-scene breathing room
+
+**Recommendation**: Add a **pacing model** — even rule-based — that considers:
+- Panel type (action vs. dialogue vs. reaction)
+- Dialogue length + reading speed
+- Scene transitions (same scene vs. scene change)
+- Music/ambient timing (when implemented)
+
+#### Issue 6: LangGraph May Be Overengineered for This
+> [!NOTE]
+> LangGraph is designed for **LLM agent orchestration** (tool calling, decision-making, conversation flow). This pipeline is a **deterministic data processing pipeline** with some ML inference steps.
+
+**Research findings**:
+- LangGraph excels at: multi-agent conversations, tool-calling loops, human-in-the-loop for LLM decisions
+- This pipeline needs: GPU resource management, model loading/unloading, crash recovery, progress tracking
+
+**Better alternatives considered**:
+| Tool | Fit | Why |
+|------|-----|-----|
+| **Prefect** | ⭐⭐⭐⭐ | Built for ML pipelines, native retry/caching, nice UI, easy to learn |
+| **Dagster** | ⭐⭐⭐⭐ | Asset-based (perfect for artifact-passing), type checking, great for data pipelines |
+| **Custom state machine** | ⭐⭐⭐⭐⭐ | Simplest, most control, no dependency overhead |
+| **LangGraph** | ⭐⭐⭐ | Workable but brings unnecessary complexity for non-LLM orchestration |
+| **Temporal.io** | ⭐⭐⭐ | Overkill for single-machine prototype |
+
+**Recommendation**: For a v0.1 prototype by one developer, a **custom state machine with Pydantic models** is the best choice. It's simpler, lighter, and you already need Pydantic for the data contracts. LangGraph adds cognitive overhead without proportional benefit. If you want a production framework later, Dagster's asset-based model maps perfectly to your artifact-passing architecture.
+
+#### Issue 7: ComfyUI as Video Backend — Good Choice, But Fragile
+ComfyUI is well-supported for Wan 2.2 and HunyuanVideo, with active community workflows. However:
+- **Workflow JSON format** can break between ComfyUI versions
+- **API mode** reliability varies
+- No built-in queue management for batch generation
+
+**Recommendation**: Use ComfyUI for prototyping but plan a **direct model loading path** using `diffusers` library as a more robust production alternative.
+
+---
+
+## 4. Suggested Changes & Improvements
+
+### Priority 1: Critical (Do Before Starting)
+
+| # | Change | Why |
+|---|--------|-----|
+| 1 | **Expand Magiv3 smoke test** to 5+ diverse manhwa pages including borderless panels, action sequences, and vertical-scroll-specific layouts | The entire pipeline depends on perception. If Magiv3 fails on manhwa, you need to know immediately. |
+| 2 | **Verify Korean TTS** capabilities. Test Qwen3-TTS, MeloTTS, and Edge-TTS on Korean dialogue samples | Korean is listed as a primary source language but no tested Korean TTS exists in the stack. |
+| 3 | **Add a manhwa-specific panel detector** as a real fallback, not just OpenCV gutter slicing | Vertical-scroll manhwa with overlapping art will defeat gutter slicing. |
+
+### Priority 2: High (Improve the Design)
+
+| # | Change | Why |
+|---|--------|-----|
+| 4 | **Replace LangGraph** with a custom Pydantic state machine or Dagster | Simpler, more appropriate for the problem, less dependency overhead. |
+| 5 | **Add IP-Adapter or reference conditioning** to the video generation step | Critical for character consistency, the #1 quality concern. |
+| 6 | **Design a camera motion taxonomy** mapped to shot types | Makes motion prompts systematic rather than ad-hoc. |
+| 7 | **Add pacing rules** beyond "duration from dialogue length" | Pacing is what makes animation feel alive vs. a slideshow. |
+| 8 | **Consider Wan 2.2 VACE** (if available) for more controllable generation | VACE supports depth/pose/edge conditioning, improving consistency. |
+
+### Priority 3: Medium (Nice to Have)
+
+| # | Change | Why |
+|---|--------|-----|
+| 9 | **Add a direct `diffusers` inference path** alongside ComfyUI | More robust for batch processing and automation. |
+| 10 | **Investigate frame interpolation** (FILM/RIFE) as a 4th animation lane | Between parallax and full I2V — useful for "minimal motion" panels. |
+| 11 | **Add subtitle styling** system (anime-style positioned text) | Plain subtitles look amateur; styled text can match the manhwa's typography. |
+| 12 | **Consider SAM2 for layer separation** in the parallax lane | Better foreground/background separation than depth maps alone. |
+| 13 | **Add a simple SFX system** using MMAudio even in v0.1 | Impact sounds and ambient noise significantly improve the feel. |
+
+### Priority 4: Stretch Goals (Post v0.1)
+
+| # | Change | Why |
+|---|--------|-----|
+| 14 | Per-character **LoRA training** for video generation | The most impactful quality improvement for character consistency. |
+| 15 | **Music scoring** with ACE-Step or similar | Transforms the clip from "demo" to "watchable content." |
+| 16 | **Lip-sync** with open-source tools (Wav2Lip, SadTalker) | Natural next step after basic TTS works. |
+
+---
+
+## 5. Architecture Assessment
+
+### Current Architecture: 4-Layer Pipeline
+
+```mermaid
+flowchart LR
+    A["1. PERCEPTION\n(Panels, Text, Characters)"] --> B["2. UNDERSTANDING\n(Scene JSON, Character Bible)"]
+    B --> C["3. GENERATION\n(Video/Parallax/Ken Burns)"]
+    C --> D["4. COMPOSITION\n(TTS, Timeline, FFmpeg)"]
+    
+    B -->|CP1| B
+    C -->|CP2| C
+```
+
+### Verdict: The layered architecture is **fundamentally sound** ✅
+
+The 4-layer design with versioned artifacts between layers is a well-established pattern for ML pipelines. The key strengths:
+
+1. **Decoupled stages** — Each can be developed, tested, and replaced independently
+2. **Artifact passing** — Intermediate results are inspectable and cacheable
+3. **Human checkpoints** — Placed at the right points (post-understanding, post-routing)
+4. **Fallback chains** — Every expensive operation has a cheaper alternative
+
+### Architecture Improvements
+
+#### A. Model Serving Strategy (Needs Rethinking)
+
+The proposal says "one heavy model resident at a time" — this is correct but the **model swapping strategy** needs more detail:
+
+```
+Current (implicit):
+  Load Qwen3-VL → run understanding → unload
+  Load Wan 2.2 → run video gen → unload
+  Load Chatterbox → run TTS → unload
+
+Better (batch by model):
+  Load Qwen3-VL → run ALL understanding → unload
+  Load LaMa → run ALL clean plates → unload
+  Load Wan 2.2 → run ALL hero panels → unload
+  Load Chatterbox → run ALL TTS → unload
+```
+
+**Recommendation**: The pipeline should be **model-aware** and batch operations by model to minimize load/unload overhead. The state machine should track which model is currently resident and queue work accordingly.
+
+#### B. Artifact Store Design
+
+The proposal mentions `runs/<run_id>/` folder structure. This should be expanded:
+
+```
+runs/<run_id>/
+  config.yaml           # Full config snapshot (reproducibility)
+  state.json            # LangGraph/state machine state
+  ledger.json           # Cost and time tracking
+  
+  panels/               # Raw extracted panels
+  panels_annotated/     # Panels with bounding boxes (debug)
+  clean_plates/         # Text-removed panels
+  
+  understanding/
+    panel_json/         # Per-panel JSON contracts
+    character_bible.json
+    
+  generation/
+    clips/              # Raw generated clips (all takes)
+    clips_accepted/     # QC-passed clips
+    qc_reports/         # Per-clip QC metrics
+    
+  audio/
+    tts/                # Per-character audio files
+    
+  composition/
+    timeline.json       # Full timeline definition
+    out.mp4             # Final output
+```
+
+#### C. Error Recovery Needs More Thought
+
+The proposal says "checkpointed state machine; idempotent nodes" but doesn't address:
+- What happens if a model produces garbage but doesn't crash? (Handled by QC ✓)
+- What if the VLM produces invalid JSON? (Needs retry with different temperature/prompt)
+- What if all video generation takes fail QC? (Falls to Ken Burns ✓)
+- What about OOM errors during video generation? (Needs: reduce resolution, switch to smaller model variant)
+
+**Add an OOM recovery strategy**: If Wan 2.2 A14B OOMs, automatically retry with TI2V-5B at lower resolution.
+
+---
+
+## 6. Model Optimization Assessment
+
+### Are the chosen models optimal? Mixed verdict.
+
+#### ✅ Good Choices
+
+| Model | Role | Verdict |
+|-------|------|---------|
+| **Qwen3-VL-8B** | Scene understanding | ✅ Excellent choice. Apache 2.0, native structured output, strong multilingual OCR. The 4B/2B fallbacks for small GPUs are well-considered. |
+| **LaMa** | Text inpainting | ✅ Still the best for this task. Light, fast, Apache 2.0. |
+| **Wan 2.2 TI2V-5B** | Video generation (dev) | ✅ Good primary choice. Apache 2.0, well-supported in ComfyUI, reasonable VRAM (~8-12 GB FP8). |
+| **Real-ESRGAN anime** | Upscaling | ✅ Purpose-built for anime upscaling. |
+| **RIFE** | Frame interpolation | ✅ Fast and effective. |
+
+#### ⚠️ Needs Attention
+
+| Model | Role | Issue | Recommendation |
+|-------|------|-------|----------------|
+| **Wan 2.2 A14B** | Video (quality) | VRAM claims conflict (16-24 GB with FP8+offload vs. ≥80 GB official). **Test this in Phase 0**, not Phase 3. | Validate VRAM on your actual hardware immediately. |
+| **HunyuanVideo 1.5** | Video candidate | Tencent Community License has regional exclusions. **Read the license before any work.** | Verify it's usable in your jurisdiction. If not, drop it from the bake-off. |
+| **LTX-2.3** | Video candidate | VRAM claims wildly inconsistent ("from 12 GB" vs. "24-32 GB at 720p FP8"). | Needs empirical testing. Also, the "native audio" feature is interesting — could eliminate the need for separate SFX generation. |
+| **Magiv3** | Perception | **Trained on manga, not manhwa.** This is the single biggest model risk. | Test on manhwa immediately. Have a real backup plan. |
+| **Chatterbox** | TTS | Primarily English. Korean/Japanese quality unverified. | Test Korean samples in Phase 0. |
+
+#### ❌ Missing Models to Consider
+
+| Model | Role | Why Add |
+|-------|------|---------|
+| **Wan 2.2 VACE** | Controllable video | Supports depth/pose/edge conditioning — could dramatically improve character consistency and motion control |
+| **MeloTTS** | Korean TTS | MIT license, supports Korean, good quality |
+| **StyleTTS2** | English TTS | Higher quality than Kokoro for English narration |
+| **SAM2** | Layer separation | Better foreground/background separation for parallax |
+| **FILM** | Frame interpolation | Google's interpolation model, higher quality than RIFE for some cases |
+| **IP-Adapter** | Identity preservation | Can be used with video generation to maintain character identity |
+
+### VRAM Budget Reality Check
+
+For the most likely scenario (**T1: 12-16 GB GPU**):
+
+| Step | Model | VRAM (estimated) | Can Coexist? |
+|------|-------|-------------------|-------------|
+| Understanding | Qwen3-VL-8B (4-bit) | ~5-6 GB | ✅ |
+| Clean plates | LaMa | ~1-2 GB | ✅ with VLM |
+| Video gen | Wan 2.2 TI2V-5B (FP8) | ~8-12 GB | ❌ Solo |
+| TTS | Chatterbox | ~4-6 GB | ✅ after video |
+| Perception | Magiv3 | ~3-4 GB | ✅ |
+
+**Key insight**: The bottleneck is video generation. All other models can potentially run concurrently on 16 GB, but video generation needs the GPU alone. The "batch by model" strategy is essential.
+
+---
+
+## 7. Summary of Recommendations
+
+### Top 5 Things to Do Differently
+
+1. **🔴 Test Magiv3 on manhwa immediately** (5+ pages, not 1) — if it fails, your entire perception layer needs redesign
+2. **🔴 Verify Korean TTS before committing** — test Qwen3-TTS, MeloTTS, Edge-TTS on actual Korean dialogue
+3. **🟡 Simplify orchestration** — replace LangGraph with a custom Pydantic state machine for v0.1
+4. **🟡 Add IP-Adapter/reference conditioning** for character consistency in video generation
+5. **🟡 Design a camera motion taxonomy** instead of ad-hoc motion prompts
+
+### Top 5 Things the Proposal Does Well
+
+1. **✅ Hybrid routing strategy** — The single best design decision
+2. **✅ Clean-plate approach** — Essential and correctly placed
+3. **✅ Phase 3 bake-off** — Evidence-based model selection
+4. **✅ Fallback chains** — Every path has a degraded-but-working alternative
+5. **✅ Artifact-passing architecture** — Clean, cacheable, inspectable
+
+### Risk-Adjusted Priority for the 16 Problems
+
+Re-ranking the proposal's problem register by actual impact:
+
+| Rank | ID | Problem | Proposal's Risk | My Assessment | Why |
+|------|----|---------|-----------------|-|-|
+| 1 | P1 | Panel segmentation on manhwa | Medium | **🔴 Critical** | Entire pipeline depends on this; manhwa ≠ manga |
+| 2 | P5 | Character consistency | High | **🔴 Critical** | No current mitigation beyond QC rejection |
+| 3 | P7 | Text garbling | High | **🟡 High** | Clean-plate mitigation is solid |
+| 4 | P6 | Style drift | High | **🟡 High** | Short clips + fallback helps |
+| 5 | P12 | Compute/VRAM | High | **🟡 High** | Tiered approach helps; still the main practical blocker |
+| 6 | P4 | Speaker attribution | High | **🟡 Medium** | Magiv3 handles this well — IF it works on manhwa |
+| 7 | P3 | Korean OCR | Medium | **🟡 Medium** | Qwen3-VL is strong here |
+| 8 | P11 | Audio design | Medium | **🟡 Medium** | Korean TTS gap makes this higher risk than stated |
+
+---
+
+> [!TIP]
+> **Recommended next step**: Before any coding, spend **1 day** running Magiv3 + Qwen3-VL on 5 diverse manhwa pages. If perception works, you have a viable project. If not, you need to pivot the perception layer first. This one experiment de-risks the entire project.
+
+
+==> ./runs/396d8463-dbfb-4263-b474-d9c558263b20/state.json <==
+{
+  "config": {
+    "run_id": "396d8463-dbfb-4263-b474-d9c558263b20",
+    "config_hash": "eb2e158654ed7889e9be97bb02ab23012548c54e83f5579b89bbdacc8f59f7ac",
+    "source_pages": [
+      "data/eval/sample_page_1.png",
+      "data/eval/sample_page_2.png",
+      "data/eval/sample_page_3.png"
+    ],
+    "source_language": "ko",
+    "output_resolution": [
+      720,
+      1280
+    ],
+    "compute_tier": "t1",
+    "created_at": "2026-10-13T17:50:03.2040072Z"
+  },
+  "current_stage": "DONE",
+  "panels": [
+    {
+      "panel_id": "panel_001",
+      "bbox": {
+        "x": 35,
+        "y": 60,
+        "w": 730,
+        "h": 501
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [
+        {
+          "speaker_id": "hero",
+          "text": "Where... is this place?",
+          "lang": "ko",
+          "emotion": "confused",
+          "confidence": 0.99
+        }
+      ],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "kenburns",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_002",
+      "bbox": {
+        "x": 55,
+        "y": 640,
+        "w": 690,
+        "h": 461
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "parallax",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_003",
+      "bbox": {
+        "x": 45,
+        "y": 1180,
+        "w": 710,
+        "h": 921
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "kenburns",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_004",
+      "bbox": {
+        "x": 45,
+        "y": 2270,
+        "w": 710,
+        "h": 581
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "parallax",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_005",
+      "bbox": {
+        "x": 35,
+        "y": 2930,
+        "w": 730,
+        "h": 621
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "kenburns",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_006",
+      "bbox": {
+        "x": 55,
+        "y": 3630,
+        "w": 690,
+        "h": 581
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "parallax",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_007",
+      "bbox": {
+        "x": 45,
+        "y": 4360,
+        "w": 710,
+        "h": 521
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "kenburns",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_008",
+      "bbox": {
+        "x": 35,
+        "y": 4960,
+        "w": 730,
+        "h": 601
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "parallax",
+      "duration_s": 2.5
+    },
+    {
+      "panel_id": "panel_009",
+      "bbox": {
+        "x": 45,
+        "y": 5640,
+        "w": 710,
+        "h": 581
+      },
+      "shot": "medium",
+      "characters": [],
+      "action": "",
+      "dialogue": [],
+      "sfx": [],
+      "motion_prompt": "",
+      "style_anchor": "2D anime, flat colors, clean line art",
+      "motion_intensity": 0.3,
+      "route": "kenburns",
+      "duration_s": 2.5
+    }
+  ],
+  "character_bible": {
+    "characters": {}
+  },
+  "clean_plate_paths": {
+    "panel_001": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_001_clean.png",
+    "panel_002": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_002_clean.png",
+    "panel_003": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_003_clean.png",
+    "panel_004": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_004_clean.png",
+    "panel_005": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_005_clean.png",
+    "panel_006": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_006_clean.png",
+    "panel_007": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_007_clean.png",
+    "panel_008": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_008_clean.png",
+    "panel_009": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clean_plates\\panel_009_clean.png"
+  },
+  "clip_candidates": {
+    "panel_001": [
+      {
+        "panel_id": "panel_001",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_001_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_002": [
+      {
+        "panel_id": "panel_002",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_002_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_003": [
+      {
+        "panel_id": "panel_003",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_003_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_004": [
+      {
+        "panel_id": "panel_004",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_004_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_005": [
+      {
+        "panel_id": "panel_005",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_005_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_006": [
+      {
+        "panel_id": "panel_006",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_006_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_007": [
+      {
+        "panel_id": "panel_007",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_007_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_008": [
+      {
+        "panel_id": "panel_008",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_008_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ],
+    "panel_009": [
+      {
+        "panel_id": "panel_009",
+        "path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\clips\\panel_009_clip_01.mp4",
+        "take_number": 1,
+        "qc_scores": {
+          "identity_similarity": 0.92,
+          "new_text_count": 0,
+          "flicker_score": 0.08,
+          "motion_score": 0.85,
+          "overall_pass": true
+        },
+        "accepted": true
+      }
+    ]
+  },
+  "audio_tracks": [
+    {
+      "panel_id": "panel_001",
+      "speaker_id": "hero",
+      "audio_path": "runs\\396d8463-dbfb-4263-b474-d9c558263b20\\audio\\panel_001_hero.wav",
+      "duration_s": 2,
+      "emotion": "confused"
+    }
+  ],
+  "cost_ledger": {
+    "total_gpu_seconds": 0,
+    "total_wall_seconds": 33.0837534,
+    "per_model_seconds": {},
+    "per_stage_seconds": {
+      "ASSEMBLE": 31.6318066,
+      "CLEAN_PLATES": 0.0005188,
+      "GENERATE": 0,
+      "INGEST": 0.4616936,
+      "QC": 0.0005403,
+      "ROUTE": 0.000509,
+      "SEGMENT": 0.9875209,
+      "TTS": 0.0005462,
+      "UNDERSTAND": 0.000618
+    }
+  },
+  "errors": [],
+  "stage_history": [
+    {
+      "stage": "INGEST",
+      "started_at": "2026-10-13T17:50:03.2040072Z",
+      "ended_at": "2026-10-13T17:50:03.6740422Z"
+    },
+    {
+      "stage": "SEGMENT",
+      "started_at": "2026-10-13T17:50:03.6740422Z",
+      "ended_at": "2026-10-13T17:50:04.6656521Z"
+    },
+    {
+      "stage": "UNDERSTAND",
+      "started_at": "2026-10-13T17:50:04.6656521Z",
+      "ended_at": "2026-10-13T17:50:04.6701222Z"
+    },
+    {
+      "stage": "CHECKPOINT_1",
+      "started_at": "2026-10-13T17:50:04.6701222Z",
+      "ended_at": "2026-10-13T17:50:28.7538696Z"
+    },
+    {
+      "stage": "CLEAN_PLATES",
+      "started_at": "2026-10-13T17:50:28.7538696Z",
+      "ended_at": "2026-10-13T17:50:28.760561Z"
+    },
+    {
+      "stage": "ROUTE",
+      "started_at": "2026-10-13T17:50:28.760561Z",
+      "ended_at": "2026-10-13T17:50:28.7713287Z"
+    },
+    {
+      "stage": "CHECKPOINT_2",
+      "started_at": "2026-10-13T17:50:28.7713287Z",
+      "ended_at": "2026-10-13T17:50:35.8390154Z"
+    },
+    {
+      "stage": "GENERATE",
+      "started_at": "2026-10-13T17:50:35.8390154Z",
+      "ended_at": "2026-10-13T17:50:35.843316Z"
+    },
+    {
+      "stage": "QC",
+      "started_at": "2026-10-13T17:50:35.843316Z",
+      "ended_at": "2026-10-13T17:50:35.8467769Z"
+    },
+    {
+      "stage": "TTS",
+      "started_at": "2026-10-13T17:50:35.8467769Z",
+      "ended_at": "2026-10-13T17:50:35.8514241Z"
+    },
+    {
+      "stage": "ASSEMBLE",
+      "started_at": "2026-10-13T17:50:35.8514241Z",
+      "ended_at": "2026-10-13T17:51:07.4889609Z"
+    },
+    {
+      "stage": "DONE",
+      "started_at": "2026-10-13T17:51:07.4889609Z"
+    }
+  ]
+}
+==> ./src/m2a/cli.py <==
+import typer
+from pathlib import Path
+from rich.console import Console
+
+from m2a.state import RunState, RunConfig, PipelineStage, QCScores
+from m2a.config import load_config
+from m2a.graph import PipelineGraph
+
+app = typer.Typer(help="Manhwa to Anime (M2A) Pipeline CLI")
+console = Console()
+
+@app.command()
+def run(
+    pages: list[Path] = typer.Argument(..., help="Source page images to process"),
+    tier: str = typer.Option("default", "--tier", help="Compute tier configuration"),
+    config_file: Path | None = typer.Option(None, "--config", help="Optional override config file"),
+    output_dir: Path = typer.Option(..., "--output-dir", help="Directory to save the run")
+):
+    """Run the full pipeline on a set of source pages."""
+    console.print(f"[bold green]Starting M2A Pipeline run...[/bold green]")
+    
+    config = load_config(tier=tier)
+    
+    run_config = RunConfig(
+        config_hash="dummy_hash",  # TODO: Compute actual hash
+        source_pages=pages,
+        source_language="ko",
+        output_resolution=config.resolution,
+        compute_tier=tier
+    )
+    
+    state = RunState(
+        config=run_config,
+        current_stage=PipelineStage.INGEST
+    )
+    
+    graph = PipelineGraph(config=config, run_dir=output_dir)
+    
+    # TODO: Register actual node handlers
+    # graph.register_node(PipelineStage.INGEST, ingest_handler)
+    
+    final_state = graph.run(state)
+    
+    if final_state.current_stage == PipelineStage.DONE:
+        console.print("[bold green]Pipeline completed successfully![/bold green]")
+    else:
+        console.print(f"[bold red]Pipeline failed at stage: {final_state.current_stage}[/bold red]")
+
+@app.command()
+def resume(
+    run_dir: Path = typer.Argument(..., help="Run directory containing state.json to resume")
+):
+    """Resume a failed or paused pipeline run."""
+    console.print(f"Resuming run from {run_dir}...")
+    try:
+        state = RunState.load(run_dir)
+        config = load_config(tier=state.config.compute_tier)
+        graph = PipelineGraph(config=config, run_dir=run_dir)
+        
+        final_state = graph.resume(state)
+        if final_state.current_stage == PipelineStage.DONE:
+            console.print("[bold green]Pipeline resumed and completed successfully![/bold green]")
+        else:
+            console.print(f"[bold red]Pipeline failed at stage: {final_state.current_stage}[/bold red]")
+            
+    except Exception as e:
+        console.print(f"[bold red]Failed to resume run: {e}[/bold red]")
+
+@app.command()
+def inspect(
+    run_dir: Path = typer.Argument(..., help="Run directory to inspect")
+):
+    """Show the current state of a pipeline run."""
+    try:
+        state = RunState.load(run_dir)
+        console.print(f"Run ID: [cyan]{state.config.run_id}[/cyan]")
+        console.print(f"Current Stage: [magenta]{state.current_stage.value}[/magenta]")
+        console.print(f"Panels Processed: {len(state.panels)}")
+        if state.errors:
+            console.print("[red]Errors:[/red]")
+            for err in state.errors:
+                console.print(f" - {err}")
+    except Exception as e:
+        console.print(f"[bold red]Failed to inspect run: {e}[/bold red]")
+
+@app.command()
+def bakeoff(
+    panels_dir: Path = typer.Argument(..., help="Directory containing panels for bakeoff"),
+    models: list[str] = typer.Option(["svd", "i2v"], "--models", help="Models to compare")
+):
+    """Run a video model comparison bakeoff."""
+    console.print(f"Running model bakeoff on {panels_dir} using models: {', '.join(models)}")
+    # TODO: Implement bakeoff logic
+    console.print("[yellow]Bakeoff implementation pending...[/yellow]")
+
+if __name__ == "__main__":
+    app()
+
+==> ./src/m2a/config.py <==
+import yaml
+from pathlib import Path
+from pydantic import BaseModel, ConfigDict
+from pydantic_settings import BaseSettings
+
+class ModelConfig(BaseModel):
+    """Model specific configuration."""
+    model_name: str
+    temperature: float = 0.7
+    max_tokens: int = 1024
+
+class PipelineConfig(BaseSettings):
+    """Main pipeline configuration mapping to YAML settings."""
+    model_config = ConfigDict(env_prefix="M2A_", frozen=False)
+    
+    tier: str = "default"
+    resolution: str = "1920x1080"
+    target_fps: int = 24
+    
+    llm: ModelConfig = ModelConfig(model_name="gpt-4")
+    tts: ModelConfig = ModelConfig(model_name="elevenlabs")
+    video_gen: ModelConfig = ModelConfig(model_name="svd")
+    
+    # Enable merging with extra kwargs
+    extra_configs: dict = {}
+
+def load_config(tier: str | None = None, overrides: dict | None = None) -> PipelineConfig:
+    """Loads and merges pipeline configurations.
+    
+    TODO: Implement actual YAML reading from default.yaml and tier.yaml.
+    For now, returns a merged PipelineConfig from kwargs.
+    """
+    config_kwargs = {}
+    
+    if tier:
+        config_kwargs["tier"] = tier
+        
+    if overrides:
+        config_kwargs.update(overrides)
+        
+    return PipelineConfig(**config_kwargs)
+
+==> ./src/m2a/eval/bakeoff.py <==
+"""Model comparison harness (Bakeoff)."""
+import json
+import logging
+from pathlib import Path
+from typing import List, Dict
+from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
+
+class BakeoffConfig(BaseModel):
+    models: List[str]
+    panel_paths: List[Path]
+    output_dir: Path
+
+def run_bakeoff(config: BakeoffConfig):
+    """Runs panels through multiple video models and collects metrics."""
+    logger.info(f"Starting bakeoff with models: {config.models}")
+    results = {}
+    
+    # TODO: Implement actual model execution loop
+    for model in config.models:
+        logger.info(f"Running {model}...")
+        model_results = []
+        for panel in config.panel_paths:
+            # 1. Generate video using model
+            # 2. Compute metrics
+            metrics = {
+                "identity_similarity": 0.9,
+                "temporal_stability": 0.8
+            }
+            model_results.append({
+                "panel": str(panel),
+                "metrics": metrics
+            })
+        results[model] = model_results
+        
+    report = generate_comparison_report(results)
+    
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    with open(config.output_dir / "bakeoff_results.json", "w") as f:
+        json.dump(results, f, indent=2)
+        
+    with open(config.output_dir / "bakeoff_report.md", "w") as f:
+        f.write(report)
+        
+    logger.info("Bakeoff complete")
+
+def generate_comparison_report(results: Dict) -> str:
+    """Generates a markdown table summarizing model comparison."""
+    # TODO: Implement full aggregation logic
+    report = "## Model Bakeoff Comparison\n\n"
+    report += "| Model | Avg Identity Sim | Avg Temporal Stability |\n"
+    report += "|-------|------------------|------------------------|\n"
+    for model, data in results.items():
+        report += f"| {model} | 0.90 | 0.80 |\n"
+    return report
+
+==> ./src/m2a/eval/metrics.py <==
+"""Quality metrics for evaluation."""
+import logging
+from typing import List, Tuple
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+def _calculate_iou(boxA: Tuple[float, float, float, float], boxB: Tuple[float, float, float, float]) -> float:
+    """Calculates Intersection over Union (IoU) for two bounding boxes (x1, y1, x2, y2)."""
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+
+    interArea = max(0, xB - xA) * max(0, yB - yA)
+    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+    
+    if boxAArea + boxBArea - interArea == 0:
+        return 0.0
+
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+    return iou
+
+def panel_detection_f1(predicted_boxes: List[Tuple[float, float, float, float]], 
+                       gt_boxes: List[Tuple[float, float, float, float]], 
+                       iou_threshold: float = 0.5) -> float:
+    """Calculates F1 score for panel detection."""
+    logger.info(f"Computing panel detection F1 with {len(predicted_boxes)} preds, {len(gt_boxes)} GTs")
+    
+    if not predicted_boxes and not gt_boxes:
+        return 1.0
+    if not predicted_boxes or not gt_boxes:
+        return 0.0
+        
+    matched_gt = set()
+    true_positives = 0
+    
+    for pred in predicted_boxes:
+        best_iou = 0
+        best_gt_idx = -1
+        for i, gt in enumerate(gt_boxes):
+            if i in matched_gt:
+                continue
+            iou = _calculate_iou(pred, gt)
+            if iou > best_iou:
+                best_iou = iou
+                best_gt_idx = i
+                
+        if best_iou >= iou_threshold:
+            true_positives += 1
+            matched_gt.add(best_gt_idx)
+            
+    precision = true_positives / len(predicted_boxes)
+    recall = true_positives / len(gt_boxes)
+    
+    if precision + recall == 0:
+        return 0.0
+        
+    return 2 * (precision * recall) / (precision + recall)
+
+def character_error_rate(predicted_text: str, gt_text: str) -> float:
+    """Calculates Character Error Rate (CER) between predicted and ground truth text."""
+    # TODO: Implement actual edit distance / Levenshtein
+    logger.info("Computing character error rate")
+    return 0.0
+
+def speaker_attribution_accuracy(predicted: dict, gt: dict) -> float:
+    """Calculates accuracy of assigning speech balloons to characters."""
+    logger.info("Computing speaker attribution accuracy")
+    return 0.0
+
+def identity_similarity(source_image: np.ndarray, frame_image: np.ndarray) -> float:
+    """Calculates character identity similarity (e.g. using CLIP)."""
+    # TODO: Implement actual CLIP embedding similarity
+    logger.info("Computing identity similarity (CLIP stub)")
+    return 1.0
+
+def temporal_stability(frames: List[np.ndarray]) -> float:
+    """Calculates temporal stability (flicker/jitter) across video frames."""
+    # TODO: Implement actual temporal consistency metric (e.g., optical flow variance)
+    logger.info("Computing temporal stability")
+    return 1.0
+
+==> ./src/m2a/eval/rubric.py <==
+"""Human evaluation rubric for generated videos."""
+from dataclasses import dataclass
+import logging
+from typing import List
+
+logger = logging.getLogger(__name__)
+
+@dataclass
+class RubricScore:
+    style_fidelity: int = 1
+    motion_appeal: int = 1
+    story_clarity: int = 1
+    audio_fit: int = 1
+
+    def __post_init__(self):
+        for val in [self.style_fidelity, self.motion_appeal, self.story_clarity, self.audio_fit]:
+            if not (1 <= val <= 5):
+                raise ValueError("Scores must be between 1 and 5")
+
+@dataclass
+class RubricResult:
+    reviewer_name: str
+    clip_id: str
+    scores: RubricScore
+    comments: str = ""
+
+    def aggregate_score(self) -> float:
+        """Returns the average score across all criteria."""
+        vals = [
+            self.scores.style_fidelity,
+            self.scores.motion_appeal,
+            self.scores.story_clarity,
+            self.scores.audio_fit
+        ]
+        return sum(vals) / len(vals)
+        
+def print_rubric_table(results: List[RubricResult]) -> str:
+    """Generates a markdown table for rubric results."""
+    # TODO: Implement actual markdown table formatting
+    table = "| Reviewer | Clip ID | Style | Motion | Story | Audio | Avg |\n"
+    table += "|----------|---------|-------|--------|-------|-------|-----|\n"
+    for r in results:
+        table += f"| {r.reviewer_name} | {r.clip_id} | {r.scores.style_fidelity} | {r.scores.motion_appeal} | {r.scores.story_clarity} | {r.scores.audio_fit} | {r.aggregate_score():.2f} |\n"
+    return table
+
+==> ./src/m2a/eval/__init__.py <==
+"""Evaluation module for Manhwa-to-Anime pipeline."""
+
+==> ./src/m2a/graph.py <==
+import logging
+import time
+from typing import Callable
+from pathlib import Path
+
+from m2a.state import RunState, PipelineStage
+from m2a.config import PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+NodeHandler = Callable[[RunState, PipelineConfig], RunState]
+
+class PipelineGraph:
+    """A clean, custom state machine for the Manhwa-to-Anime pipeline."""
+    
+    def __init__(self, config: PipelineConfig, run_dir: Path):
+        self.config = config
+        self.run_dir = run_dir
+        self.nodes: dict[PipelineStage, NodeHandler] = {}
+        
+        # Define valid transitions
+        self.transitions = {
+            PipelineStage.INGEST: PipelineStage.SEGMENT,
+            PipelineStage.SEGMENT: PipelineStage.UNDERSTAND,
+            PipelineStage.UNDERSTAND: PipelineStage.CHECKPOINT_1,
+            PipelineStage.CHECKPOINT_1: PipelineStage.CLEAN_PLATES,
+            PipelineStage.CLEAN_PLATES: PipelineStage.ROUTE,
+            PipelineStage.ROUTE: PipelineStage.CHECKPOINT_2,
+            PipelineStage.CHECKPOINT_2: PipelineStage.GENERATE,
+            PipelineStage.GENERATE: PipelineStage.QC,
+            PipelineStage.QC: PipelineStage.TTS,
+            PipelineStage.TTS: PipelineStage.ASSEMBLE,
+            PipelineStage.ASSEMBLE: PipelineStage.DONE,
+        }
+
+    def register_node(self, stage: PipelineStage, handler: NodeHandler) -> None:
+        """Registers a handler function for a specific pipeline stage."""
+        self.nodes[stage] = handler
+
+    def _save_checkpoint(self, state: RunState) -> None:
+        """Saves the current state."""
+        try:
+            state.save(self.run_dir)
+            logger.info(f"Checkpoint saved at stage: {state.current_stage}")
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+
+    def _execute_stage(self, stage: PipelineStage, state: RunState) -> RunState:
+        """Executes a single stage with retry logic."""
+        if stage not in self.nodes:
+            # If no handler is registered, just advance state if it's a structural node
+            logger.warning(f"No handler registered for {stage}, skipping...")
+            return state
+            
+        handler = self.nodes[stage]
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                start_time = time.time()
+                logger.info(f"Starting stage: {stage} (Attempt {attempt + 1})")
+                new_state = handler(state, self.config)
+                elapsed = time.time() - start_time
+                new_state.cost_ledger.per_stage_seconds[stage.value] = elapsed
+                return new_state
+            except Exception as e:
+                logger.error(f"Error in stage {stage}: {e}")
+                if attempt == max_retries - 1:
+                    state.errors.append(f"Stage {stage} failed after {max_retries} attempts: {str(e)}")
+                    state.advance_to(PipelineStage.FAILED)
+                    return state
+                time.sleep(2 ** attempt)  # Exponential backoff
+        return state
+
+    def run(self, state: RunState) -> RunState:
+        """Runs the pipeline from the beginning."""
+        return self.resume(state)
+
+    def resume(self, state: RunState) -> RunState:
+        """Resumes the pipeline from its current stage."""
+        logger.info(f"Resuming pipeline from stage: {state.current_stage}")
+        
+        while state.current_stage != PipelineStage.DONE and state.current_stage != PipelineStage.FAILED:
+            current_stage = state.current_stage
+            
+            # Execute current stage
+            state = self._execute_stage(current_stage, state)
+            
+            if state.current_stage == PipelineStage.FAILED:
+                self._save_checkpoint(state)
+                break
+                
+            # Determine next stage
+            next_stage = self.transitions.get(current_stage)
+            if next_stage is None:
+                logger.error(f"No transition defined from {current_stage}")
+                state.errors.append(f"Invalid transition from {current_stage}")
+                state.advance_to(PipelineStage.FAILED)
+                self._save_checkpoint(state)
+                break
+                
+            state.advance_to(next_stage)
+            self._save_checkpoint(state)
+            
+        return state
+
+==> ./src/m2a/nodes/assemble.py <==
+"""Assembly node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+from pathlib import Path
+import subprocess
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def assemble(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Build final video timeline, mix audio, add subtitles, and assemble with FFmpeg.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting assemble node...")
+    
+    try:
+        run_folder = state.workspace_dir / "run"
+        final_output = run_folder / "final_output.mp4"
+        list_file_path = run_folder / "concat_list.txt"
+        srt_file_path = run_folder / "subtitles.srt"
+        
+        # 1. Generate SRT and build concat list
+        srt_content = ""
+        srt_index = 1
+        current_time = 0.0
+        
+        with open(list_file_path, "w") as f_list:
+            for panel in state.panels:
+                clip_path = panel.get("final_clip")
+                if not clip_path:
+                    continue
+                    
+                # Mock duration handling
+                # TODO: Retrieve actual duration from video file
+                duration = 3.0
+                
+                f_list.write(f"file '{clip_path}'\n")
+                
+                # Subtitles
+                for track in panel.get("audio_tracks", []):
+                    # Mock timing based on current sequence
+                    start_sec = current_time
+                    end_sec = current_time + duration
+                    
+                    def format_time(seconds):
+                        h = int(seconds // 3600)
+                        m = int((seconds % 3600) // 60)
+                        s = int(seconds % 60)
+                        ms = int((seconds - int(seconds)) * 1000)
+                        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+                        
+                    srt_content += f"{srt_index}\n"
+                    srt_content += f"{format_time(start_sec)} --> {format_time(end_sec)}\n"
+                    srt_content += f"{track['text']}\n\n"
+                    srt_index += 1
+                    
+                current_time += duration
+                
+        with open(srt_file_path, "w", encoding="utf-8") as f_srt:
+            f_srt.write(srt_content)
+            
+        # 2. Assemble with FFmpeg
+        # TODO: Add complex filter for crossfade transitions and audio mixing
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(list_file_path),
+            "-vf", f"subtitles={srt_file_path}",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(final_output)
+        ]
+        
+        logger.info(f"Running FFmpeg: {' '.join(ffmpeg_cmd)}")
+        # Uncomment in production when dependencies and inputs exist
+        # subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        
+        state.final_video_path = str(final_output)
+        
+    except Exception as e:
+        logger.exception("Error in assemble node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Assemble node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/clean_plates.py <==
+"""Clean plates node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+from pathlib import Path
+import cv2
+import numpy as np
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def clean_plates(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Create text masks and run inpainting to remove text from panels.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting clean_plates node...")
+    
+    try:
+        plates_dir = state.workspace_dir / "run" / "clean_plates"
+        plates_dir.mkdir(parents=True, exist_ok=True)
+        
+        for panel in state.panels:
+            panel_path = Path(panel["path"])
+            img = cv2.imread(str(panel_path))
+            
+            if img is None:
+                continue
+                
+            # Create a blank mask
+            mask = np.zeros(img.shape[:2], dtype=np.uint8)
+            
+            # Draw filled rectangles on text bboxes
+            dialogue = panel.get("understanding", {}).get("dialogue", [])
+            for text_item in dialogue:
+                if "bbox" in text_item:
+                    x, y, w, h = text_item["bbox"]
+                    cv2.rectangle(mask, (x, y), (x+w, y+h), 255, -1)
+                    
+            # TODO: Call LaMa provider for actual inpainting instead of this simple cv2 inpaint
+            # For now, using cv2.inpaint as a stub
+            clean_img = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+            
+            # TODO: Handle aspect ratio normalization for video generation (e.g., pad to 16:9)
+            
+            clean_path = plates_dir / f"clean_{panel_path.name}"
+            cv2.imwrite(str(clean_path), clean_img)
+            
+            panel["clean_plate_path"] = str(clean_path)
+            
+            # Update cost ledger
+            if hasattr(state, "cost_ledger"):
+                state.cost_ledger.add_cost("inpainting_api", 0.005)
+            
+    except Exception as e:
+        logger.exception("Error in clean_plates node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Clean plates node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/generate.py <==
+"""Generation node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+
+# TODO: Import actual state types and providers
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def generate(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Generate animation clips for panels based on routing.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting generate node...")
+    
+    try:
+        max_retries = getattr(config, "max_retries", 3)
+        
+        for panel in state.panels:
+            route = panel.get("route", "kenburns")
+            candidates = []
+            
+            for take in range(max_retries):
+                try:
+                    # TODO: Call actual providers based on route decision
+                    clip_path = f"mock_clip_{panel['id']}_take{take}.mp4"
+                    
+                    if route == "i2v":
+                        # Call video provider (Wan22, etc.)
+                        if hasattr(state, "cost_ledger"):
+                            state.cost_ledger.add_cost("i2v_api", 0.05)
+                        pass
+                    elif route == "parallax":
+                        # Call parallax renderer
+                        if hasattr(state, "cost_ledger"):
+                            state.cost_ledger.add_cost("parallax_compute", 0.02)
+                        pass
+                    else:
+                        # Call kenburns renderer
+                        if hasattr(state, "cost_ledger"):
+                            state.cost_ledger.add_cost("kenburns_compute", 0.01)
+                        pass
+                        
+                    candidate = {
+                        "take": take,
+                        "path": clip_path,
+                        "status": "pending_qc"
+                    }
+                    candidates.append(candidate)
+                    break # Success, don't need more takes unless QC fails later
+                    
+                except Exception as e:
+                    logger.warning(f"Take {take} failed for panel {panel['id']}: {e}")
+                    
+            panel["clip_candidates"] = candidates
+            
+    except Exception as e:
+        logger.exception("Error in generate node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Generate node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/ingest.py <==
+"""Ingestion node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+from pathlib import Path
+from PIL import Image
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def ingest(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Ingest source manhwa pages and stitch them into a single strip.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting ingest node...")
+    
+    try:
+        # TODO: Get input directory from state or config
+        input_dir = state.workspace_dir / "inputs"
+        run_folder = state.workspace_dir / "run"
+        run_folder.mkdir(parents=True, exist_ok=True)
+        
+        image_paths = sorted(
+            [p for p in input_dir.iterdir() if p.suffix.lower() in ('.png', '.jpg', '.jpeg')]
+        )
+        
+        if not image_paths:
+            raise FileNotFoundError(f"No images found in {input_dir}")
+            
+        images = []
+        for p in image_paths:
+            try:
+                img = Image.open(p)
+                img.load() # Validate it's a real image
+                images.append(img)
+            except Exception as e:
+                logger.error(f"Failed to load image {p}: {e}")
+                
+        if not images:
+            raise ValueError("No valid images could be loaded.")
+            
+        # Stitch images vertically
+        widths, heights = zip(*(i.size for i in images))
+        
+        max_width = max(widths)
+        total_height = sum(heights)
+        
+        stitched_image = Image.new('RGB', (max_width, total_height), color='white')
+        
+        y_offset = 0
+        for img in images:
+            # Center horizontally if needed
+            x_offset = (max_width - img.width) // 2
+            stitched_image.paste(img, (x_offset, y_offset))
+            y_offset += img.height
+            
+        output_path = run_folder / "stitched_strip.png"
+        stitched_image.save(output_path)
+        logger.info(f"Saved stitched image to {output_path}")
+        
+        # Update state
+        state.stitched_image_path = output_path
+        
+    except Exception as e:
+        logger.exception("Error in ingest node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Ingest node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/qc.py <==
+"""Quality control node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def qc(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Run quality checks on generated clip candidates.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting qc node...")
+    
+    try:
+        for panel in state.panels:
+            candidates = panel.get("clip_candidates", [])
+            accepted_clip = None
+            
+            for candidate in candidates:
+                # Stub metric calculation patterns
+                
+                # 1. Identity similarity (CLIP/face embedding comparison)
+                identity_score = 0.95 # TODO: Implement actual calculation
+                
+                # 2. New text detection (OCR on frames vs clean plate)
+                text_artifacts = 0 # TODO: Implement actual calculation
+                
+                # 3. Flicker/drift (frame difference statistics)
+                flicker_score = 0.05 # TODO: Implement actual calculation
+                
+                # 4. Motion sanity (reject static or extreme shake)
+                motion_score = 0.5 # TODO: Implement actual calculation
+                
+                if identity_score > 0.8 and text_artifacts == 0 and flicker_score < 0.1 and 0.1 < motion_score < 0.9:
+                    candidate["status"] = "accepted"
+                    accepted_clip = candidate
+                    break
+                else:
+                    candidate["status"] = "rejected"
+                    
+            if not accepted_clip:
+                logger.warning(f"All takes failed QC for panel {panel['id']}. Triggering fallback.")
+                # Trigger fallback to kenburns
+                # TODO: Implement actual fallback generation code here
+                panel["final_clip"] = "mock_fallback_kenburns.mp4"
+            else:
+                panel["final_clip"] = accepted_clip["path"]
+                
+    except Exception as e:
+        logger.exception("Error in qc node")
+        state.errors.append(str(e))
+        
+    logger.info(f"QC node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/route.py <==
+"""Routing node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def route(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Decide generation routing (i2v, parallax, kenburns) for each panel.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting route node...")
+    
+    try:
+        # GPU budget defaults to 100 if not provided
+        # TODO: Implement robust GPU budget tracking on the state object
+        gpu_budget = getattr(config, "gpu_budget", 100)
+        
+        for panel in state.panels:
+            understanding = panel.get("understanding", {})
+            motion_intensity = understanding.get("motion_intensity", "low")
+            shot_type = understanding.get("shot_type", "medium")
+            is_action = understanding.get("is_action", False)
+            
+            # Hero panel logic
+            is_hero_panel = (shot_type == "close_up" and motion_intensity == "high") or is_action
+            
+            if is_hero_panel and gpu_budget >= 10:
+                route_decision = "i2v"
+                gpu_budget -= 10
+            elif shot_type == "medium" and motion_intensity == "moderate" and gpu_budget >= 5:
+                route_decision = "parallax"
+                gpu_budget -= 5
+            else:
+                route_decision = "kenburns"
+                gpu_budget -= 1
+                
+            panel["route"] = route_decision
+            
+    except Exception as e:
+        logger.exception("Error in route node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Route node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/segment.py <==
+"""Segmentation node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+from pathlib import Path
+import cv2
+import numpy as np
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def segment(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Detect panels from the stitched strip.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting segment node...")
+    
+    try:
+        stitched_path = state.stitched_image_path
+        if not stitched_path or not stitched_path.exists():
+            raise FileNotFoundError("Stitched image not found in state.")
+            
+        img = cv2.imread(str(stitched_path))
+        if img is None:
+            raise ValueError(f"Could not read image from {stitched_path}")
+            
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+        
+        # Dilate to connect components
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+        dilated = cv2.dilate(thresh, kernel, iterations=2)
+        
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        panels_dir = state.workspace_dir / "run" / "panels"
+        panels_dir.mkdir(parents=True, exist_ok=True)
+        
+        bboxes = []
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            # Filter out tiny noise contours
+            if w > 50 and h > 50:
+                bboxes.append((x, y, w, h))
+                
+        # Sort by y first, then x (with some tolerance for y)
+        def sort_key(bbox):
+            x, y, w, h = bbox
+            return (y // 50, x)
+            
+        bboxes.sort(key=sort_key)
+        
+        for i, (x, y, w, h) in enumerate(bboxes):
+            panel_crop = img[y:y+h, x:x+w]
+            panel_path = panels_dir / f"panel_{i:03d}.png"
+            cv2.imwrite(str(panel_path), panel_crop)
+            
+            # Create PanelJSON stub
+            panel_stub = {
+                "id": f"panel_{i:03d}",
+                "path": str(panel_path),
+                "bbox": [x, y, w, h]
+            }
+            state.panels.append(panel_stub)
+            
+        logger.info(f"Detected {len(bboxes)} panels.")
+        
+    except Exception as e:
+        logger.exception("Error in segment node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Segment node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/tts.py <==
+"""Text-to-Speech node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+
+# TODO: Import actual state types
+# from m2a.state import RunState, PipelineConfig
+
+logger = logging.getLogger(__name__)
+
+def tts_node(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Generate speech for dialogue lines.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting tts node...")
+    
+    try:
+        audio_dir = state.workspace_dir / "run" / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        
+        for panel in state.panels:
+            dialogue = panel.get("understanding", {}).get("dialogue", [])
+            panel["audio_tracks"] = []
+            
+            for i, line in enumerate(dialogue):
+                text = line.get("text", "")
+                speaker = line.get("speaker", "unknown")
+                emotion = line.get("emotion", "neutral")
+                
+                # TODO: Map speaker to voice profile from CharacterBible
+                voice_profile = "default_voice"
+                
+                # TODO: Call TTS provider with text, emotion, voice
+                audio_path = audio_dir / f"audio_{panel['id']}_{i}.wav"
+                
+                # Mock saving audio
+                with open(audio_path, "wb") as f:
+                    f.write(b"mock audio data")
+                    
+                track_entry = {
+                    "text": text,
+                    "speaker": speaker,
+                    "emotion": emotion,
+                    "path": str(audio_path)
+                }
+                panel["audio_tracks"].append(track_entry)
+                
+                if hasattr(state, "cost_ledger"):
+                    state.cost_ledger.add_cost("tts_api", 0.002)
+                
+    except Exception as e:
+        logger.exception("Error in tts node")
+        state.errors.append(str(e))
+        
+    logger.info(f"TTS node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/understand.py <==
+"""Understanding node for the Manhwa-to-Anime pipeline."""
+
+import logging
+import time
+
+# TODO: Import actual state types and providers
+# from m2a.state import RunState, PipelineConfig
+# from m2a.providers import vlm, ocr
+
+logger = logging.getLogger(__name__)
+
+def understand(state: 'RunState', config: 'PipelineConfig') -> 'RunState':
+    """Analyze panels to extract dialog, characters, and scene context.
+    
+    Args:
+        state: Current run state.
+        config: Pipeline configuration.
+        
+    Returns:
+        Updated run state.
+    """
+    start_time = time.time()
+    logger.info("Starting understand node...")
+    
+    try:
+        # TODO: Implement actual VLM calls for panel understanding
+        # TODO: Implement OCR (language-routed) for dialogue extraction
+        # TODO: Run character detection and clustering
+        # TODO: Build/update CharacterBible
+        
+        for panel in state.panels:
+            # Mock VLM and OCR response schema
+            panel["understanding"] = {
+                "characters": [],
+                "dialogue": [],
+                "scene_context": "Mock scene context",
+                "motion_intensity": "low",
+                "shot_type": "medium",
+                "needs_review": False
+            }
+            
+            # Update cost ledger
+            if hasattr(state, "cost_ledger"):
+                state.cost_ledger.add_cost("vlm_api", 0.01)
+            
+    except Exception as e:
+        logger.exception("Error in understand node")
+        state.errors.append(str(e))
+        
+    logger.info(f"Understand node completed in {time.time() - start_time:.2f}s")
+    return state
+
+==> ./src/m2a/nodes/__init__.py <==
+"""Node definitions for the Manhwa-to-Anime pipeline."""
+
+from m2a.nodes.ingest import ingest
+from m2a.nodes.segment import segment
+from m2a.nodes.understand import understand
+from m2a.nodes.clean_plates import clean_plates
+from m2a.nodes.route import route
+from m2a.nodes.generate import generate
+from m2a.nodes.qc import qc
+from m2a.nodes.tts import tts_node
+from m2a.nodes.assemble import assemble
+
+__all__ = [
+    "ingest",
+    "segment",
+    "understand",
+    "clean_plates",
+    "route",
+    "generate",
+    "qc",
+    "tts_node",
+    "assemble",
+]
+
+==> ./src/m2a/providers/base.py <==
+"""Base abstract classes for all providers."""
+import logging
+from abc import ABC, abstractmethod
+from pathlib import Path
+from pydantic import BaseModel
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+class TextRegion(BaseModel):
+    """Represents a detected text region."""
+    text: str
+    bbox: List[int]
+    confidence: float
+    language: str
+
+class BBox(BaseModel):
+    """Bounding box coordinates."""
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+class CharacterDetection(BaseModel):
+    """Character detected in a panel."""
+    bbox: BBox
+    character_id: str
+    confidence: float
+
+class TextDetection(BaseModel):
+    """Text detection details."""
+    bbox: BBox
+    confidence: float
+
+class SpeakerLink(BaseModel):
+    """Links a text region to a character."""
+    text_bbox: BBox
+    character_bbox: BBox
+    confidence: float
+
+class VideoProvider(ABC):
+    """Abstract base class for video generation providers."""
+    @abstractmethod
+    def generate_clip(self, image: Path, prompt: str, duration_s: float, seed: int, **kwargs) -> Path:
+        """Generates a video clip from an image."""
+        pass
+
+    @abstractmethod
+    def estimate_vram_gb(self) -> float:
+        """Estimates VRAM usage in GB."""
+        pass
+
+    @abstractmethod
+    def model_name(self) -> str:
+        """Returns the model name."""
+        pass
+
+class VLMProvider(ABC):
+    """Abstract base class for Vision-Language Models."""
+    @abstractmethod
+    def analyze_panel(self, image: Path, schema: dict) -> dict:
+        """Analyzes a panel and returns structured data matching the schema."""
+        pass
+
+    @abstractmethod  
+    def ocr(self, image: Path, language: str) -> list[dict]:
+        """Performs OCR on an image."""
+        pass
+
+class OCRProvider(ABC):
+    """Abstract base class for OCR providers."""
+    @abstractmethod
+    def recognize(self, image: Path, language: str) -> list[TextRegion]:
+        """Recognizes text in an image."""
+        pass
+
+class TTSProvider(ABC):
+    """Abstract base class for Text-to-Speech providers."""
+    @abstractmethod
+    def synthesize(self, text: str, voice_id: str, emotion: str, output_path: Path) -> float:
+        """Synthesizes speech and returns duration."""
+        pass
+
+    @abstractmethod
+    def clone_voice(self, reference_audio: Path) -> str:
+        """Clones a voice and returns a voice_id."""
+        pass
+
+class InpaintProvider(ABC):
+    """Abstract base class for inpainting providers."""
+    @abstractmethod
+    def inpaint(self, image: Path, mask: Path, output: Path) -> Path:
+        """Inpaints an image using a mask."""
+        pass
+
+class PerceptionProvider(ABC):
+    """Abstract base class for perception providers."""
+    @abstractmethod
+    def detect_panels(self, image: Path) -> list[BBox]:
+        """Detects panels in an image."""
+        pass
+
+    @abstractmethod
+    def detect_characters(self, image: Path, panels: list[BBox]) -> list[CharacterDetection]:
+        """Detects characters within panels."""
+        pass
+
+    @abstractmethod
+    def detect_text(self, image: Path) -> list[TextDetection]:
+        """Detects text regions."""
+        pass
+
+    @abstractmethod
+    def link_speakers(self, image: Path, text_regions: list[TextDetection], characters: list[CharacterDetection]) -> list[SpeakerLink]:
+        """Links detected text to characters."""
+        pass
+
+==> ./src/m2a/providers/__init__.py <==
+"""Provider registry and exports."""
+import logging
+from typing import Type
+
+from .base import (
+    VideoProvider, VLMProvider, OCRProvider, TTSProvider, InpaintProvider, PerceptionProvider
+)
+
+logger = logging.getLogger(__name__)
+
+# Registries
+_VIDEO_PROVIDERS: dict[str, Type[VideoProvider]] = {}
+_VLM_PROVIDERS: dict[str, Type[VLMProvider]] = {}
+_OCR_PROVIDERS: dict[str, Type[OCRProvider]] = {}
+_TTS_PROVIDERS: dict[str, Type[TTSProvider]] = {}
+_INPAINT_PROVIDERS: dict[str, Type[InpaintProvider]] = {}
+_PERCEPTION_PROVIDERS: dict[str, Type[PerceptionProvider]] = {}
+
+def get_video_provider(name: str, **kwargs) -> VideoProvider:
+    if name not in _VIDEO_PROVIDERS:
+        raise ValueError(f"VideoProvider '{name}' not found.")
+    return _VIDEO_PROVIDERS[name](**kwargs)
+
+def get_vlm_provider(name: str, **kwargs) -> VLMProvider:
+    if name not in _VLM_PROVIDERS:
+        raise ValueError(f"VLMProvider '{name}' not found.")
+    return _VLM_PROVIDERS[name](**kwargs)
+
+def get_ocr_provider(name: str, **kwargs) -> OCRProvider:
+    if name not in _OCR_PROVIDERS:
+        raise ValueError(f"OCRProvider '{name}' not found.")
+    return _OCR_PROVIDERS[name](**kwargs)
+
+def get_tts_provider(name: str, **kwargs) -> TTSProvider:
+    if name not in _TTS_PROVIDERS:
+        raise ValueError(f"TTSProvider '{name}' not found.")
+    return _TTS_PROVIDERS[name](**kwargs)
+
+def get_inpainter(name: str, **kwargs) -> InpaintProvider:
+    if name not in _INPAINT_PROVIDERS:
+        raise ValueError(f"InpaintProvider '{name}' not found.")
+    return _INPAINT_PROVIDERS[name](**kwargs)
+
+def get_perception_provider(name: str, **kwargs) -> PerceptionProvider:
+    if name not in _PERCEPTION_PROVIDERS:
+        raise ValueError(f"PerceptionProvider '{name}' not found.")
+    return _PERCEPTION_PROVIDERS[name](**kwargs)
+
+# TODO: Import and register providers here as they are implemented.
+# e.g. from .video.wan22 import Wan22Provider
+
+==> ./src/m2a/render/kenburns.py <==
+"""Ken Burns effect rendering."""
+import logging
+from typing import List
+from pathlib import Path
+import numpy as np
+
+# TODO: Replace with real cv2/PIL imports when available
+# import cv2
+# from PIL import Image
+
+logger = logging.getLogger(__name__)
+
+def apply_ken_burns(image_path: Path, duration: float = 3.0, fps: int = 24, zoom_range: tuple = (1.0, 1.2), pan_direction: str = "random") -> List[np.ndarray]:
+    """Applies a Ken Burns effect to a panel image.
+    
+    Args:
+        image_path: Path to the image.
+        duration: Duration of the clip in seconds.
+        fps: Frames per second.
+        zoom_range: Tuple of (start_zoom, end_zoom).
+        pan_direction: Direction of pan ('random', 'left', 'right', 'up', 'down').
+        
+    Returns:
+        List of generated frames (numpy arrays).
+    """
+    logger.info(f"Applying Ken Burns to {image_path}")
+    frames = []
+    num_frames = int(duration * fps)
+    
+    # TODO: Implement actual frame generation using cv2/PIL
+    # 1. Load image
+    # 2. Determine crop start and end regions based on zoom_range and pan_direction
+    # 3. Interpolate between start and end regions over num_frames
+    # 4. Crop and resize to target resolution
+    # 5. Append to frames list
+    
+    for _ in range(num_frames):
+        # Stub: Generate a blank frame
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        frames.append(frame)
+        
+    return frames
+
+==> ./src/m2a/render/parallax.py <==
+"""2.5D Parallax rendering."""
+import logging
+from pathlib import Path
+from typing import List, Optional
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+def apply_parallax(image_path: Path, depth_map_path: Optional[Path] = None, duration: float = 3.0, fps: int = 24) -> List[np.ndarray]:
+    """Applies a 2.5D parallax effect using a depth map.
+    
+    Args:
+        image_path: Path to the image.
+        depth_map_path: Path to the depth map. If None, generated automatically.
+        duration: Duration of clip.
+        fps: Frames per second.
+        
+    Returns:
+        List of generated frames.
+    """
+    logger.info(f"Applying parallax to {image_path}")
+    frames = []
+    num_frames = int(duration * fps)
+    
+    # TODO: Implement actual layer separation and parallax computation
+    # 1. Generate or load depth map (e.g., using depth-anything)
+    # 2. Separate foreground and background layers (e.g., using rembg or depth thresholding)
+    # 3. Compute differential motion trajectories for FG and BG
+    # 4. For each frame, shift layers and composite them
+    # 5. Handle occlusions/inpainting if necessary
+    
+    for _ in range(num_frames):
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        frames.append(frame)
+        
+    return frames
+
+==> ./src/m2a/render/transitions.py <==
+"""Video transition effects."""
+import logging
+from typing import List
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+def crossfade(clip_a: List[np.ndarray], clip_b: List[np.ndarray], duration_frames: int) -> List[np.ndarray]:
+    """Applies a crossfade transition between two clips."""
+    logger.info(f"Applying crossfade transition for {duration_frames} frames")
+    if len(clip_a) < duration_frames or len(clip_b) < duration_frames:
+        raise ValueError("Clips must be longer than duration_frames")
+        
+    result = clip_a[:-duration_frames]
+    
+    # TODO: Implement actual frame blending
+    for i in range(duration_frames):
+        alpha = (i + 1) / (duration_frames + 1)
+        frame_a = clip_a[-duration_frames + i]
+        frame_b = clip_b[i]
+        
+        # blended = cv2.addWeighted(frame_a, 1 - alpha, frame_b, alpha, 0)
+        blended = frame_a # Stub
+        result.append(blended)
+        
+    result.extend(clip_b[duration_frames:])
+    return result
+
+def hard_cut(clip_a: List[np.ndarray], clip_b: List[np.ndarray]) -> List[np.ndarray]:
+    """Concatenates two clips with a hard cut."""
+    logger.info("Applying hard cut transition")
+    return clip_a + clip_b
+
+def fade_to_black(clip: List[np.ndarray], duration_frames: int) -> List[np.ndarray]:
+    """Applies a fade to black at the end of the clip."""
+    logger.info(f"Applying fade to black for {duration_frames} frames")
+    if len(clip) < duration_frames:
+        raise ValueError("Clip must be longer than duration_frames")
+        
+    result = clip[:-duration_frames]
+    
+    # TODO: Implement actual darkening of frames
+    for i in range(duration_frames):
+        alpha = 1.0 - (i + 1) / (duration_frames + 1)
+        frame = clip[-duration_frames + i]
+        # darkened = (frame * alpha).astype(np.uint8)
+        darkened = frame # Stub
+        result.append(darkened)
+        
+    return result
+
+def apply_transition(clip_a: List[np.ndarray], clip_b: List[np.ndarray], transition_type: str = "hard_cut", **kwargs) -> List[np.ndarray]:
+    """Applies the specified transition between two clips."""
+    if transition_type == "crossfade":
+        return crossfade(clip_a, clip_b, kwargs.get("duration_frames", 12))
+    elif transition_type == "hard_cut":
+        return hard_cut(clip_a, clip_b)
+    else:
+        logger.warning(f"Unknown transition type {transition_type}, falling back to hard cut")
+        return hard_cut(clip_a, clip_b)
+
+==> ./src/m2a/render/__init__.py <==
+"""Render engine module for Manhwa-to-Anime."""
+from .kenburns import apply_ken_burns
+from .parallax import apply_parallax
+from .transitions import apply_transition
+
+__all__ = ["apply_ken_burns", "apply_parallax", "apply_transition"]
+
+==> ./src/m2a/state.py <==
+import json
+import uuid
+import hashlib
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Literal, Callable, Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class BBox(BaseModel):
+    """Bounding box coordinates."""
+    model_config = ConfigDict(frozen=False)
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class DialogueLine(BaseModel):
+    """A line of dialogue spoken by a character."""
+    model_config = ConfigDict(frozen=False)
+    speaker_id: str
+    text: str
+    lang: Literal["ko", "ja", "en"]
+    emotion: str
+    bbox: BBox | None = None
+    confidence: float
+
+
+class SFX(BaseModel):
+    """Sound effect present in a panel."""
+    model_config = ConfigDict(frozen=False)
+    text: str
+    kind: Literal["impact", "ambient", "motion"]
+    bbox: BBox | None = None
+
+
+class CharacterRef(BaseModel):
+    """Reference to a character in a specific panel."""
+    model_config = ConfigDict(frozen=False)
+    id: str
+    name: str
+    emotion: str
+    pose: str
+    crop_path: Path | None = None
+
+
+class PanelJSON(BaseModel):
+    """Data representation of a single manga/manhwa panel."""
+    model_config = ConfigDict(frozen=False)
+    panel_id: str
+    bbox: BBox
+    shot: Literal["close_up", "medium", "wide", "splash"]
+    characters: list[CharacterRef]
+    action: str
+    dialogue: list[DialogueLine]
+    sfx: list[SFX]
+    motion_prompt: str
+    style_anchor: str = "2D anime, flat colors, clean line art"
+    motion_intensity: float = Field(ge=0.0, le=1.0, default=0.3)
+    route: Literal["i2v", "parallax", "kenburns"] = "kenburns"
+    duration_s: float = Field(ge=0.5, le=10.0, default=4.0)
+
+
+class VoiceProfile(BaseModel):
+    """Voice configuration for a character."""
+    model_config = ConfigDict(frozen=False)
+    voice_id: str
+    reference_audio_path: Path | None = None
+    style: str
+
+
+class CharacterEntry(BaseModel):
+    """Detailed character information for the bible."""
+    model_config = ConfigDict(frozen=False)
+    name: str
+    description: str
+    reference_crops: list[Path] = Field(default_factory=list)
+    voice: VoiceProfile
+    appearances: list[str] = Field(default_factory=list)
+
+
+class CharacterBible(BaseModel):
+    """Global character bible across the project."""
+    model_config = ConfigDict(frozen=False)
+    characters: dict[str, CharacterEntry] = Field(default_factory=dict)
+
+
+class QCScores(BaseModel):
+    """Quality control scores for a generated clip."""
+    model_config = ConfigDict(frozen=False)
+    identity_similarity: float
+    new_text_count: int
+    flicker_score: float
+    motion_score: float
+    overall_pass: bool
+
+
+class ClipCandidate(BaseModel):
+    """A generated video clip candidate for a panel."""
+    model_config = ConfigDict(frozen=False)
+    panel_id: str
+    path: Path
+    take_number: int
+    qc_scores: QCScores
+    accepted: bool
+
+
+class AudioTrack(BaseModel):
+    """Generated audio track for dialogue/sfx."""
+    model_config = ConfigDict(frozen=False)
+    panel_id: str
+    speaker_id: str
+    audio_path: Path
+    duration_s: float
+    emotion: str
+
+
+class CostLedger(BaseModel):
+    """Tracks compute costs."""
+    model_config = ConfigDict(frozen=False)
+    total_gpu_seconds: float = 0.0
+    total_wall_seconds: float = 0.0
+    per_model_seconds: dict[str, float] = Field(default_factory=dict)
+    per_stage_seconds: dict[str, float] = Field(default_factory=dict)
+
+
+class RunConfig(BaseModel):
+    """Configuration for a specific pipeline run."""
+    model_config = ConfigDict(frozen=False)
+    run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    config_hash: str
+    source_pages: list[Path]
+    source_language: str
+    output_resolution: str
+    compute_tier: str
+    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+
+
+class PipelineStage(str, Enum):
+    """Stages of the Manhwa-to-Anime pipeline."""
+    INGEST = "INGEST"
+    SEGMENT = "SEGMENT"
+    UNDERSTAND = "UNDERSTAND"
+    CHECKPOINT_1 = "CHECKPOINT_1"
+    CLEAN_PLATES = "CLEAN_PLATES"
+    ROUTE = "ROUTE"
+    CHECKPOINT_2 = "CHECKPOINT_2"
+    GENERATE = "GENERATE"
+    QC = "QC"
+    TTS = "TTS"
+    ASSEMBLE = "ASSEMBLE"
+    DONE = "DONE"
+    FAILED = "FAILED"
+
+
+class RunState(BaseModel):
+    """The complete state of a pipeline run."""
+    model_config = ConfigDict(frozen=False)
+    
+    config: RunConfig
+    current_stage: PipelineStage
+    panels: list[PanelJSON] = Field(default_factory=list)
+    character_bible: CharacterBible | None = None
+    clean_plate_paths: dict[str, Path] = Field(default_factory=dict)
+    clip_candidates: dict[str, list[ClipCandidate]] = Field(default_factory=dict)
+    audio_tracks: list[AudioTrack] = Field(default_factory=list)
+    cost_ledger: CostLedger = Field(default_factory=CostLedger)
+    errors: list[str] = Field(default_factory=list)
+
+    def save(self, run_dir: Path) -> None:
+        """Saves the current state to the specified directory."""
+        state_file = run_dir / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        # Using model_dump_json for Pydantic v2
+        state_file.write_text(self.model_dump_json(indent=2))
+
+    @classmethod
+    def load(cls, run_dir: Path) -> "RunState":
+        """Loads the state from the specified directory."""
+        state_file = run_dir / "state.json"
+        if not state_file.exists():
+            raise FileNotFoundError(f"State file not found at {state_file}")
+        return cls.model_validate_json(state_file.read_text())
+
+    def content_hash(self) -> str:
+        """Returns a hash of the current state content."""
+        data = self.model_dump_json(exclude={"cost_ledger", "current_stage", "errors"})
+        return hashlib.sha256(data.encode('utf-8')).hexdigest()
+
+    def advance_to(self, stage: PipelineStage) -> None:
+        """Advances the state to a new pipeline stage."""
+        self.current_stage = stage
+
+==> ./src/m2a/__init__.py <==
+"""
+Manhwa to Anime (m2a) pipeline package.
+"""
+
+__version__ = "0.1.0"
+
+from m2a.state import RunState, PanelJSON, CharacterBible
+from m2a.config import PipelineConfig
+
+__all__ = [
+    "RunState",
+    "PipelineConfig",
+    "PanelJSON",
+    "CharacterBible",
+]
+
+==> ./ui/streamlit_app.py <==
+"""Streamlit app for Manhwa-to-Anime pipeline editing and monitoring."""
+import streamlit as st
+import logging
+
+logger = logging.getLogger(__name__)
+
+st.set_page_config(page_title="Manhwa-to-Anime Editor", layout="wide")
+
+st.title("Manhwa-to-Anime Editor")
+
+# Upload and Config
+with st.expander("Job Configuration", expanded=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        uploaded_files = st.file_uploader("Upload Manhwa Pages", accept_multiple_files=True, type=['png', 'jpg'])
+    with col2:
+        compute_tier = st.selectbox("Compute Tier", ["standard", "high-perf", "dev"])
+        
+    if st.button("Start Pipeline Run"):
+        # TODO: Call API to submit job
+        st.success("Pipeline started!")
+
+st.divider()
+
+# CP1: Panel Editor
+st.header("Checkpoint 1: Panel Detection")
+with st.expander("View and Edit Panels"):
+    col_img, col_json = st.columns([1, 1])
+    with col_img:
+        st.image("https://via.placeholder.com/400x600?text=Panel+Image", caption="Detected Panels")
+    with col_json:
+        # TODO: Load actual panel JSON
+        panel_json = st.text_area("Panel JSON", value='{"panels": []}', height=400)
+        if st.button("Save Panels"):
+            st.success("Panels updated!")
+
+st.divider()
+
+# CP2: Routing Decisions
+st.header("Checkpoint 2: Route Editor")
+with st.expander("View and Edit Routing Decisions"):
+    # TODO: Load actual routing decisions
+    st.write("Route for Panel 1: **Image-to-Video (Wan 2.2)**")
+    new_route = st.selectbox("Change Route", ["Wan 2.2", "Ken Burns", "Parallax", "Hunyuan 1.5"])
+    if st.button("Approve Routes"):
+        st.success("Routes approved!")
+
+st.divider()
+
+# Progress and Results
+st.header("Job Status")
+progress_bar = st.progress(0)
+# TODO: Poll API for status
+st.write("Current Status: Idle")
+st.text_area("Logs", value="Waiting for job...", height=200, disabled=True)
+
+if st.button("Download Final MP4"):
+    # TODO: Download from API
+    st.info("Downloading file...")
+
+==> ./workers/assembler.py <==
+"""Video assembly module for Phase 1.
+
+Chains panel clips together with crossfade transitions and encodes the final
+timeline into:
+  1. H.264 MP4 (if ffmpeg is available)
+  2. MJPEG AVI (zero-dependency pure-Python video container)
+  3. Animated WebP (browser-compatible high fidelity animation)
+"""
+import io
+import struct
+import shutil
+import subprocess
+from pathlib import Path
+from typing import List, Tuple
+from PIL import Image
+import numpy as np
+import logging
+
+logger = logging.getLogger("m2a.assembler")
+
+def crossfade_transition(clip_a: List[Image.Image], clip_b: List[Image.Image], transition_frames: int = 12) -> List[Image.Image]:
+    """Blends the tail of clip_a with the head of clip_b using linear alpha crossfade."""
+    if len(clip_a) < transition_frames or len(clip_b) < transition_frames:
+        return clip_a + clip_b
+        
+    lead_a = clip_a[:-transition_frames]
+    tail_a = clip_a[-transition_frames:]
+    head_b = clip_b[:transition_frames]
+    tail_b = clip_b[transition_frames:]
+    
+    blended = []
+    for i in range(transition_frames):
+        alpha = float(i + 1) / float(transition_frames + 1)
+        # PIL blend
+        blended_frame = Image.blend(tail_a[i], head_b[i], alpha)
+        blended.append(blended_frame)
+        
+    return lead_a + blended + tail_b
+
+def encode_mjpeg_avi(frames: List[Image.Image], output_path: Path, fps: int = 24, quality: int = 85) -> Path:
+    """Encodes a sequence of PIL images into a playable Motion-JPEG AVI file."""
+    if not frames:
+        raise ValueError("Cannot encode empty frame list")
+        
+    w, h = frames[0].size
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    jpeg_bytes_list = []
+    for f in frames:
+        buf = io.BytesIO()
+        f.save(buf, format="JPEG", quality=quality)
+        b = buf.getvalue()
+        if len(b) % 2 != 0:
+            b += b"\x00"
+        jpeg_bytes_list.append(b)
+        
+    num_frames = len(frames)
+    us_per_frame = int(1_000_000 / fps)
+    
+    # 1. movi chunk
+    movi_data = io.BytesIO()
+    idx1_entries = []
+    offset = 4 # offset relative to movi chunk body
+    
+    for b in jpeg_bytes_list:
+        chunk_header = b"00dc" + struct.pack("<I", len(b))
+        movi_data.write(chunk_header + b)
+        idx1_entries.append((b"00dc", 0x10, offset, len(b)))
+        offset += len(chunk_header) + len(b)
+        
+    movi_bytes = b"movi" + movi_data.getvalue()
+    movi_chunk = b"LIST" + struct.pack("<I", len(movi_bytes)) + movi_bytes
+    
+    # 2. idx1 chunk
+    idx1_data = io.BytesIO()
+    for fourcc, flags, off, length in idx1_entries:
+        idx1_data.write(fourcc + struct.pack("<III", flags, off, length))
+    idx1_chunk = b"idx1" + struct.pack("<I", len(idx1_data.getvalue())) + idx1_data.getvalue()
+    
+    # 3. strf chunk (BITMAPINFOHEADER)
+    strf_data = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, int.from_bytes(b"MJPG", "little"), w * h * 3, 0, 0, 0, 0)
+    strf_chunk = b"strf" + struct.pack("<I", len(strf_data)) + strf_data
+    
+    # 4. strh chunk
+    strh_data = struct.pack("<4s4sIIIIIIIIII", b"vids", b"MJPG", 0, 0, 0, 1, fps, 0, num_frames, 1000000, 0xFFFFFFFF, 0)
+    strh_chunk = b"strh" + struct.pack("<I", len(strh_data)) + strh_data
+    
+    strl_bytes = b"strl" + strh_chunk + strf_chunk
+    strl_chunk = b"LIST" + struct.pack("<I", len(strl_bytes)) + strl_bytes
+    
+    # 5. avih chunk (14 DWORDs)
+    avih_data = struct.pack("<14I", us_per_frame, 0, 0, 0x10, num_frames, 0, 1, 1000000, w, h, 0, 0, 0, 0)
+    avih_chunk = b"avih" + struct.pack("<I", len(avih_data)) + avih_data
+    
+    hdrl_bytes = b"hdrl" + avih_chunk + strl_chunk
+    hdrl_chunk = b"LIST" + struct.pack("<I", len(hdrl_bytes)) + hdrl_bytes
+    
+    # Final RIFF header
+    riff_data = hdrl_chunk + movi_chunk + idx1_chunk
+    riff_bytes = b"AVI " + riff_data
+    riff_chunk = b"RIFF" + struct.pack("<I", len(riff_bytes)) + riff_bytes
+    
+    with open(output_path, "wb") as f:
+        f.write(riff_chunk)
+        
+    logger.info(f"Encoded {num_frames} frames to {output_path} ({w}x{h} @ {fps}fps)")
+    return output_path
+
+def assemble_timeline(
+    clips: List[List[Image.Image]],
+    output_base_path: Path,
+    fps: int = 24,
+    transition_frames: int = 8,
+) -> dict:
+    """Assembles multiple panel clips into a single continuous video with transitions.
+    
+    Produces:
+      - .avi: Standard video
+      - .webp: Web animation
+      - .mp4: H.264 MP4 if FFmpeg is installed
+    """
+    if not clips:
+        raise ValueError("No clips provided to assemble")
+        
+    # Stitch clips with transitions
+    full_timeline = clips[0]
+    for next_clip in clips[1:]:
+        full_timeline = crossfade_transition(full_timeline, next_clip, transition_frames=transition_frames)
+        
+    output_base_path = Path(output_base_path)
+    output_base_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    avi_path = output_base_path.with_suffix(".avi")
+    webp_path = output_base_path.with_suffix(".webp")
+    mp4_path = output_base_path.with_suffix(".mp4")
+    
+    # 1. Always write AVI
+    encode_mjpeg_avi(full_timeline, avi_path, fps=fps)
+    
+    # 2. Write animated WebP (sampling at 12fps for compact file size)
+    step = max(1, fps // 12)
+    sample_frames = full_timeline[::step]
+    sample_frames[0].save(
+        webp_path,
+        save_all=True,
+        append_images=sample_frames[1:],
+        duration=int(1000 / 12),
+        loop=0,
+    )
+    
+    # 3. If ffmpeg is in PATH, convert to H.264 MP4
+    ffmpeg_exe = shutil.which("ffmpeg")
+    has_mp4 = False
+    if ffmpeg_exe:
+        try:
+            cmd = [
+                ffmpeg_exe, "-y",
+                "-i", str(avi_path),
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                str(mp4_path),
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            has_mp4 = True
+            logger.info(f"Generated H.264 MP4 via FFmpeg: {mp4_path}")
+        except Exception as e:
+            logger.warning(f"FFmpeg MP4 conversion failed: {e}")
+            
+    return {
+        "total_frames": len(full_timeline),
+        "duration_s": len(full_timeline) / float(fps),
+        "avi_path": str(avi_path),
+        "webp_path": str(webp_path),
+        "mp4_path": str(mp4_path) if has_mp4 else str(avi_path),
+    }
+
+==> ./workers/eval_segmentation.py <==
+"""Panel detection evaluation script for Phase 1.
+
+Evaluates panel segmentation against data/eval/ground_truth.json
+using Intersection over Union (IoU >= 0.5), Precision, Recall, and F1 score.
+Target in proposal: F1 >= 0.90.
+"""
+import json
+from pathlib import Path
+from typing import Dict, List, Tuple
+from slicer import detect_panels_gutter
+
+def calculate_iou(box_a: Dict[str, int], box_b: Dict[str, int]) -> float:
+    """Calculates Intersection over Union (IoU) of two bounding boxes."""
+    ax1, ay1, aw, ah = box_a["x"], box_a["y"], box_a["w"], box_a["h"]
+    ax2, ay2 = ax1 + aw, ay1 + ah
+    
+    bx1, by1, bw, bh = box_b["x"], box_b["y"], box_b["w"], box_b["h"]
+    bx2, by2 = bx1 + bw, by1 + bh
+    
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    
+    area_a = aw * ah
+    area_b = bw * bh
+    union_area = area_a + area_b - inter_area
+    
+    if union_area <= 0:
+        return 0.0
+    return inter_area / union_area
+
+def evaluate_detection(gt_path: Path, iou_threshold: float = 0.5) -> Dict[str, float]:
+    """Runs evaluation across all pages in ground truth file."""
+    with open(gt_path, "r", encoding="utf-8") as f:
+        gt_data = json.load(f)
+        
+    pages = gt_data["source_pages"]
+    gt_panels = gt_data["panels"]
+    
+    # Group GT by page
+    gt_by_page: Dict[str, List[Dict]] = {p: [] for p in pages}
+    for p in gt_panels:
+        page_name = p.get("page")
+        if page_name in gt_by_page:
+            gt_by_page[page_name].append(p)
+            
+    total_tp = 0
+    total_fp = 0
+    total_fn = 0
+    per_page_results = []
+    
+    for page_name in pages:
+        page_path = gt_path.parent / page_name
+        page_gt = gt_by_page[page_name]
+        
+        # Run detection
+        detected = detect_panels_gutter(page_path)
+        
+        # Match detections to GT
+        matched_gt = set()
+        matched_det = set()
+        
+        for det_idx, det in enumerate(detected):
+            best_iou = 0.0
+            best_gt_idx = -1
+            for gt_idx, gt in enumerate(page_gt):
+                if gt_idx in matched_gt:
+                    continue
+                iou = calculate_iou(det["bbox"], gt["bbox"])
+                if iou > best_iou:
+                    best_iou = iou
+                    best_gt_idx = gt_idx
+                    
+            if best_iou >= iou_threshold and best_gt_idx != -1:
+                matched_gt.add(best_gt_idx)
+                matched_det.add(det_idx)
+                
+        tp = len(matched_det)
+        fp = len(detected) - tp
+        fn = len(page_gt) - tp
+        
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+        
+        page_p = tp / len(detected) if len(detected) > 0 else 0.0
+        page_r = tp / len(page_gt) if len(page_gt) > 0 else 0.0
+        page_f1 = (2 * page_p * page_r) / (page_p + page_r) if (page_p + page_r) > 0 else 0.0
+        
+        per_page_results.append({
+            "page": page_name,
+            "gt_count": len(page_gt),
+            "detected_count": len(detected),
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+            "precision": page_p,
+            "recall": page_r,
+            "f1": page_f1,
+        })
+        
+    precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    report = {
+        "total_gt_panels": len(gt_panels),
+        "total_tp": total_tp,
+        "total_fp": total_fp,
+        "total_fn": total_fn,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "iou_threshold": iou_threshold,
+        "passed_target": f1 >= 0.90,
+        "pages": per_page_results,
+    }
+    return report
+
+if __name__ == "__main__":
+    gt_file = Path("data/eval/ground_truth.json")
+    results = evaluate_detection(gt_file)
+    print("=" * 60)
+    print("PANEL DETECTION EVALUATION REPORT (Phase 1 Target: F1 >= 0.90)")
+    print("=" * 60)
+    print(f"Total Ground Truth Panels: {results['total_gt_panels']}")
+    print(f"True Positives:            {results['total_tp']}")
+    print(f"False Positives:           {results['total_fp']}")
+    print(f"False Negatives:           {results['total_fn']}")
+    print(f"Precision:                 {results['precision']:.4f}")
+    print(f"Recall:                    {results['recall']:.4f}")
+    print(f"F1 Score:                  {results['f1']:.4f}")
+    print(f"Status:                    {'PASSED (F1 >= 0.90)' if results['passed_target'] else 'FAILED'}")
+    print("=" * 60)
+    for p in results["pages"]:
+        print(f"  {p['page']}: GT={p['gt_count']}, Det={p['detected_count']}, P={p['precision']:.2f}, R={p['recall']:.2f}, F1={p['f1']:.2f}")
+
+==> ./workers/ingest.py <==
+"""Ingest module for vertical-scroll manhwa.
+
+Normalizes image sizes and stitches multiple consecutive pages into
+a single seamless vertical strip.
+"""
+from pathlib import Path
+from typing import List, Tuple
+from PIL import Image
+import logging
+
+logger = logging.getLogger("m2a.ingest")
+
+def stitch_vertical_pages(page_paths: List[Path], output_path: Path, target_width: int = 800) -> Tuple[Path, Tuple[int, int]]:
+    """Stitches a list of vertical-scroll manhwa pages into a single vertical strip.
+    
+    Args:
+        page_paths: List of file paths to the input pages in reading order.
+        output_path: Path where the stitched image will be saved.
+        target_width: Normalized width to resize pages to (preserves aspect ratio).
+        
+    Returns:
+        (output_path, (total_width, total_height))
+    """
+    if not page_paths:
+        raise ValueError("No pages provided to ingest")
+        
+    loaded_images = []
+    total_height = 0
+    
+    for p in page_paths:
+        p = Path(p)
+        if not p.exists():
+            raise FileNotFoundError(f"Page file not found: {p}")
+        img = Image.open(p).convert("RGB")
+        
+        # Scale to target width while keeping aspect ratio
+        if img.width != target_width:
+            scale = target_width / img.width
+            new_h = int(img.height * scale)
+            img = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
+            
+        loaded_images.append(img)
+        total_height += img.height
+        
+    # Create canvas
+    canvas = Image.new("RGB", (target_width, total_height), (255, 255, 255))
+    current_y = 0
+    for img in loaded_images:
+        canvas.paste(img, (0, current_y))
+        current_y += img.height
+        
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output_path, quality=95)
+    logger.info(f"Stitched {len(page_paths)} pages -> {output_path} ({target_width}x{total_height})")
+    return output_path, (target_width, total_height)
+
+==> ./workers/pipeline_cli.py <==
+"""Command-line bridge for Go backend to invoke Python AI/CV workers.
+
+Commands:
+  - ingest: stitch vertical pages into single strip
+  - segment: detect panels via gutter slicing & save crops
+  - baseline: full Phase 1 end-to-end motion-comic generator
+"""
+import sys
+import json
+import argparse
+from pathlib import Path
+
+from ingest import stitch_vertical_pages
+from slicer import detect_panels_gutter, crop_and_save_panels
+from render_kenburns import generate_kenburns_frames
+from render_parallax import generate_parallax_frames
+from assembler import assemble_timeline
+
+def cmd_ingest(args):
+    pages = [Path(p) for p in args.pages.split(",")]
+    out = Path(args.output)
+    out_path, (w, h) = stitch_vertical_pages(pages, out)
+    print(json.dumps({"stitched_path": str(out_path), "width": w, "height": h}))
+
+def cmd_segment(args):
+    image_path = Path(args.image)
+    panels = detect_panels_gutter(image_path)
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        crop_paths = crop_and_save_panels(image_path, panels, out_dir)
+        for p, cp in zip(panels, crop_paths):
+            p["crop_path"] = str(cp)
+    print(json.dumps({"panels": panels}))
+
+def cmd_baseline(args):
+    pages = [Path(p) for p in args.pages.split(",")]
+    run_dir = Path(args.run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 1. Ingest / stitch
+    stitched_path = run_dir / "stitched.png"
+    stitch_vertical_pages(pages, stitched_path)
+    
+    # 2. Segment
+    panels_dir = run_dir / "panels"
+    panels = detect_panels_gutter(stitched_path)
+    crop_paths = crop_and_save_panels(stitched_path, panels, panels_dir)
+    for p, cp in zip(panels, crop_paths):
+        p["crop_path"] = str(cp)
+        
+    # 3. Render 2D Motion (alternating Ken Burns and Parallax)
+    clips = []
+    fps = args.fps
+    duration_per_panel = args.duration
+    
+    for idx, (p, cp) in enumerate(zip(panels, crop_paths)):
+        # Alternate motion type for visual variety
+        if idx % 2 == 0:
+            frames = generate_kenburns_frames(
+                cp,
+                target_res=(720, 1280),
+                duration_s=duration_per_panel,
+                fps=fps,
+                motion_type="zoom_in" if idx % 4 == 0 else "pan_down",
+            )
+        else:
+            frames = generate_parallax_frames(
+                cp,
+                target_res=(720, 1280),
+                duration_s=duration_per_panel,
+                fps=fps,
+            )
+        clips.append(frames)
+        
+    # 4. Assemble with transitions
+    output_base = run_dir / "baseline"
+    result = assemble_timeline(clips, output_base, fps=fps, transition_frames=8)
+    
+    result["panels"] = panels
+    result["num_panels"] = len(panels)
+    print(json.dumps(result))
+
+def main():
+    parser = argparse.ArgumentParser(description="M2A Python Worker CLI")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    p_ingest = subparsers.add_parser("ingest")
+    p_ingest.add_argument("--pages", required=True, help="Comma-separated page paths")
+    p_ingest.add_argument("--output", required=True, help="Output stitched image path")
+    
+    p_segment = subparsers.add_parser("segment")
+    p_segment.add_argument("--image", required=True, help="Stitched image path")
+    p_segment.add_argument("--output-dir", help="Directory to save panel crops")
+    
+    p_base = subparsers.add_parser("baseline")
+    p_base.add_argument("--pages", required=True, help="Comma-separated page paths")
+    p_base.add_argument("--run-dir", required=True, help="Run output directory")
+    p_base.add_argument("--duration", type=float, default=2.5, help="Duration per panel in seconds")
+    p_base.add_argument("--fps", type=int, default=24, help="Frames per second")
+    
+    args = parser.parse_args()
+    if args.command == "ingest":
+        cmd_ingest(args)
+    elif args.command == "segment":
+        cmd_segment(args)
+    elif args.command == "baseline":
+        cmd_baseline(args)
+
+if __name__ == "__main__":
+    main()
+
+==> ./workers/render_kenburns.py <==
+"""Ken Burns pan-and-zoom motion generator for 9:16 portrait video.
+
+Given a panel image, calculates smooth cinematic camera trajectory (zoom + pan)
+using cubic easing and renders individual frames.
+"""
+from pathlib import Path
+from typing import List, Tuple
+from PIL import Image
+import numpy as np
+import logging
+
+logger = logging.getLogger("m2a.kenburns")
+
+def cubic_ease_in_out(t: float) -> float:
+    """Smooth cubic acceleration and deceleration curve."""
+    if t < 0.5:
+        return 4.0 * t * t * t
+    else:
+        p = 2.0 * t - 2.0
+        return 0.5 * p * p * p + 1.0
+
+def generate_kenburns_frames(
+    image_path: Path,
+    target_res: Tuple[int, int] = (720, 1280), # [width, height] 9:16
+    duration_s: float = 3.0,
+    fps: int = 24,
+    motion_type: str = "zoom_in", # "zoom_in", "zoom_out", "pan_down", "pan_up"
+) -> List[Image.Image]:
+    """Generates a sequence of PIL images with Ken Burns camera motion.
+    
+    Fits the panel image into target_res using a cinematic letterbox/crop
+    and applies smooth pan/zoom interpolation.
+    """
+    img = Image.open(image_path).convert("RGB")
+    src_w, src_h = img.size
+    dst_w, dst_h = target_res
+    
+    total_frames = max(1, int(duration_s * fps))
+    frames = []
+    
+    # Base scale to cover or letterbox
+    scale = max(dst_w / src_w, dst_h / src_h) * 1.15
+    scaled_w = int(src_w * scale)
+    scaled_h = int(src_h * scale)
+    scaled_img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+    
+    # Center coordinates on scaled canvas
+    cx = scaled_w / 2.0
+    cy = scaled_h / 2.0
+    
+    # Motion parameter endpoints
+    if motion_type == "zoom_in":
+        zoom_start, zoom_end = 1.0, 1.18
+        dx_start, dy_start = 0.0, 0.0
+        dx_end, dy_end = 0.0, scaled_h * 0.03
+    elif motion_type == "zoom_out":
+        zoom_start, zoom_end = 1.18, 1.0
+        dx_start, dy_start = 0.0, scaled_h * 0.03
+        dx_end, dy_end = 0.0, 0.0
+    elif motion_type == "pan_down":
+        zoom_start, zoom_end = 1.05, 1.08
+        dx_start, dy_start = 0.0, -scaled_h * 0.05
+        dx_end, dy_end = 0.0, scaled_h * 0.05
+    else: # pan_up
+        zoom_start, zoom_end = 1.08, 1.05
+        dx_start, dy_start = 0.0, scaled_h * 0.05
+        dx_end, dy_end = 0.0, -scaled_h * 0.05
+        
+    for frame_idx in range(total_frames):
+        norm_t = frame_idx / max(1, total_frames - 1)
+        eased_t = cubic_ease_in_out(norm_t)
+        
+        current_zoom = zoom_start + (zoom_end - zoom_start) * eased_t
+        current_dx = dx_start + (dx_end - dx_start) * eased_t
+        current_dy = dy_start + (dy_end - dy_start) * eased_t
+        
+        # Viewport dimensions on scaled image
+        view_w = dst_w / current_zoom
+        view_h = dst_h / current_zoom
+        
+        view_cx = cx + current_dx
+        view_cy = cy + current_dy
+        
+        left = max(0, min(scaled_w - view_w, view_cx - view_w / 2.0))
+        top = max(0, min(scaled_h - view_h, view_cy - view_h / 2.0))
+        right = left + view_w
+        bottom = top + view_h
+        
+        crop_box = (int(left), int(top), int(right), int(bottom))
+        frame = scaled_img.crop(crop_box).resize((dst_w, dst_h), Image.Resampling.BILINEAR)
+        frames.append(frame)
+        
+    logger.info(f"Rendered {len(frames)} Ken Burns frames for {image_path} ({duration_s}s @ {fps}fps)")
+    return frames
+
+==> ./workers/render_parallax.py <==
+"""2.5D parallax layer animation renderer.
+
+Simulates depth by separating visual content into layers and animating foreground
+and background with differential velocity (foreground moves faster).
+"""
+from pathlib import Path
+from typing import List, Tuple
+from PIL import Image, ImageFilter
+import numpy as np
+import logging
+from render_kenburns import cubic_ease_in_out
+
+logger = logging.getLogger("m2a.parallax")
+
+def generate_depth_mask(img: Image.Image) -> Image.Image:
+    """Generates a soft foreground depth mask based on visual salience and central focus."""
+    w, h = img.size
+    # Center-weighted Gaussian oval mask
+    y_coords, x_coords = np.ogrid[:h, :w]
+    cy, cx = h * 0.55, w * 0.5
+    dist = ((x_coords - cx) / (w * 0.38)) ** 2 + ((y_coords - cy) / (h * 0.38)) ** 2
+    mask_arr = np.clip(1.0 - dist * 0.6, 0.0, 1.0)
+    
+    # Combine with image edge salience
+    gray = np.array(img.convert("L"), dtype=np.float32) / 255.0
+    grad_y, grad_x = np.gradient(gray)
+    edge_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+    edge_norm = np.clip(edge_mag * 4.0, 0.0, 1.0)
+    
+    combined = np.clip(mask_arr * 0.7 + edge_norm * 0.3, 0.0, 1.0)
+    mask_uint8 = (combined * 255).astype(np.uint8)
+    return Image.fromarray(mask_uint8, mode="L").filter(ImageFilter.GaussianBlur(radius=8))
+
+def generate_parallax_frames(
+    image_path: Path,
+    target_res: Tuple[int, int] = (720, 1280),
+    duration_s: float = 3.0,
+    fps: int = 24,
+) -> List[Image.Image]:
+    """Renders 2.5D parallax frames with differential layer motion."""
+    img = Image.open(image_path).convert("RGB")
+    src_w, src_h = img.size
+    dst_w, dst_h = target_res
+    
+    total_frames = max(1, int(duration_s * fps))
+    frames = []
+    
+    # Scale base image to cover target with margin for shifting
+    scale = max(dst_w / src_w, dst_h / src_h) * 1.2
+    scaled_w = int(src_w * scale)
+    scaled_h = int(src_h * scale)
+    scaled_img = img.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
+    
+    # Generate soft depth mask
+    mask = generate_depth_mask(scaled_img)
+    
+    # Create slightly blurred background and crisp foreground
+    bg_img = scaled_img.filter(ImageFilter.GaussianBlur(radius=2))
+    fg_img = scaled_img
+    
+    cx = (scaled_w - dst_w) / 2.0
+    cy = (scaled_h - dst_h) / 2.0
+    
+    max_shift_x = dst_w * 0.04
+    max_shift_y = dst_h * 0.03
+    
+    for frame_idx in range(total_frames):
+        norm_t = frame_idx / max(1, total_frames - 1)
+        eased_t = cubic_ease_in_out(norm_t) - 0.5 # centered around 0
+        
+        # Background shifts slowly in one direction
+        bg_dx = cx - max_shift_x * 0.4 * eased_t
+        bg_dy = cy - max_shift_y * 0.4 * eased_t
+        bg_crop = bg_img.crop((int(bg_dx), int(bg_dy), int(bg_dx + dst_w), int(bg_dy + dst_h)))
+        
+        # Foreground shifts faster in opposite direction (parallax)
+        fg_dx = cx + max_shift_x * 0.8 * eased_t
+        fg_dy = cy + max_shift_y * 0.8 * eased_t
+        fg_crop = fg_img.crop((int(fg_dx), int(fg_dy), int(fg_dx + dst_w), int(fg_dy + dst_h)))
+        mask_crop = mask.crop((int(fg_dx), int(fg_dy), int(fg_dx + dst_w), int(fg_dy + dst_h)))
+        
+        # Composite foreground over background using mask
+        composite = Image.composite(fg_crop, bg_crop, mask_crop)
+        frames.append(composite)
+        
+    logger.info(f"Rendered {len(frames)} Parallax frames for {image_path} ({duration_s}s @ {fps}fps)")
+    return frames
+
+==> ./workers/server.py <==
+"""AI Worker Server — lightweight HTTP API wrapping Python ML models.
+
+The Go backend calls these endpoints to delegate AI inference.
+Each endpoint accepts image paths/data and returns structured JSON.
+"""
+import logging
+from pathlib import Path
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="M2A AI Worker", version="0.1.0")
+logger = logging.getLogger("m2a.worker")
+
+# --- Request/Response Models ---
+
+class BBox(BaseModel):
+    x: int
+    y: int  
+    w: int
+    h: int
+
+class SegmentRequest(BaseModel):
+    image_path: str
+    method: str = "opencv"  # "opencv" or "magiv3"
+
+class SegmentResponse(BaseModel):
+    panels: list[BBox]
+    method_used: str
+
+class UnderstandRequest(BaseModel):
+    panel_image_path: str
+    panel_id: str
+    language: str = "ko"
+
+class DialogueLineResponse(BaseModel):
+    speaker_id: str = ""
+    text: str = ""
+    lang: str = "ko"
+    emotion: str = "neutral"
+    confidence: float = 0.0
+
+class UnderstandResponse(BaseModel):
+    panel_id: str
+    shot: str = "medium"
+    action: str = ""
+    motion_prompt: str = ""
+    motion_intensity: float = 0.3
+    dialogue: list[DialogueLineResponse] = []
+    characters: list[dict] = []
+
+class InpaintRequest(BaseModel):
+    image_path: str
+    mask_path: str
+    output_path: str
+
+class InpaintResponse(BaseModel):
+    output_path: str
+    success: bool
+
+class TTSRequest(BaseModel):
+    text: str
+    voice_id: str = "default"
+    emotion: str = "neutral"
+    language: str = "ko"
+    output_path: str
+
+class TTSResponse(BaseModel):
+    audio_path: str
+    duration_s: float
+
+class HealthResponse(BaseModel):
+    status: str
+    loaded_models: list[str]
+    gpu_available: bool
+
+# --- Endpoints ---
+
+@app.get("/health", response_model=HealthResponse)
+def health():
+    """Health check — reports loaded models and GPU status."""
+    return HealthResponse(
+        status="ok",
+        loaded_models=[],  # Will be populated when models are loaded
+        gpu_available=False,  # Stub
+    )
+
+@app.post("/segment", response_model=SegmentResponse)
+def segment_panels(req: SegmentRequest):
+    """Detect panels in a manhwa page image."""
+    logger.info(f"Segmenting {req.image_path} with method={req.method}")
+    if not Path(req.image_path).exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {req.image_path}")
+    
+    # STUB: Return mock panels
+    # In production, this calls OpenCV gutter slicing or Magiv3
+    return SegmentResponse(
+        panels=[
+            BBox(x=0, y=0, w=800, h=400),
+            BBox(x=0, y=420, w=800, h=350),
+            BBox(x=0, y=790, w=800, h=500),
+        ],
+        method_used=req.method,
+    )
+
+@app.post("/understand", response_model=UnderstandResponse)
+def understand_panel(req: UnderstandRequest):
+    """Run VLM understanding on a single panel."""
+    logger.info(f"Understanding panel {req.panel_id} from {req.panel_image_path}")
+    if not Path(req.panel_image_path).exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {req.panel_image_path}")
+    
+    # STUB: Return mock understanding
+    return UnderstandResponse(
+        panel_id=req.panel_id,
+        shot="medium",
+        action="Character stands in dramatic pose",
+        motion_prompt="slow push-in, subtle hair sway",
+        motion_intensity=0.3,
+        dialogue=[],
+        characters=[],
+    )
+
+@app.post("/inpaint", response_model=InpaintResponse)
+def inpaint_text(req: InpaintRequest):
+    """Remove text from panel using inpainting."""
+    logger.info(f"Inpainting {req.image_path}")
+    # STUB
+    return InpaintResponse(output_path=req.output_path, success=True)
+
+@app.post("/tts", response_model=TTSResponse)
+def synthesize_speech(req: TTSRequest):
+    """Generate TTS audio for a dialogue line."""
+    logger.info(f"TTS: '{req.text[:50]}...' voice={req.voice_id} lang={req.language}")
+    # STUB
+    return TTSResponse(audio_path=req.output_path, duration_s=2.5)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8100, log_level="info")
+
+==> ./workers/slicer.py <==
+"""Gutter slicing panel detector for vertical-scroll manhwa.
+
+Uses row and column variance analysis to detect gutters (whitespace/background bands),
+extracts panel bounding boxes, assigns reading order, and crops individual panels.
+"""
+from pathlib import Path
+from typing import List, Dict, Tuple, Any
+from PIL import Image
+import numpy as np
+import logging
+
+logger = logging.getLogger("m2a.slicer")
+
+def is_gutter_row(row_pixels: np.ndarray, variance_thresh: float = 12.0, bg_bright_thresh: float = 240.0) -> bool:
+    """Checks if a horizontal row is a uniform gutter."""
+    # Std dev across width for each channel
+    std_val = float(np.std(row_pixels, axis=0).mean())
+    mean_val = float(np.mean(row_pixels))
+    # Row is gutter if low variance AND (high brightness or dark border)
+    if std_val < variance_thresh and (mean_val > bg_bright_thresh or mean_val < 25.0):
+        return True
+    return False
+
+def detect_panels_gutter(
+    image_path: Path,
+    min_panel_height: int = 150,
+    min_panel_width: int = 200,
+    min_gutter_height: int = 15,
+) -> List[Dict[str, Any]]:
+    """Detects panels in a manhwa page or strip using gutter slicing.
+    
+    Returns a list of dicts with:
+      - panel_id: e.g. "panel_001"
+      - bbox: {"x": int, "y": int, "w": int, "h": int}
+      - reading_order: int (1-indexed)
+    """
+    img = Image.open(image_path).convert("RGB")
+    arr = np.array(img, dtype=np.float32)
+    h, w, _ = arr.shape
+    
+    # 1. Classify each row as gutter or content
+    is_gutter = np.zeros(h, dtype=bool)
+    for y in range(h):
+        row = arr[y, :, :]
+        is_gutter[y] = is_gutter_row(row)
+        
+    # 2. Smooth small gutter interruptions (noise < min_gutter_height)
+    # A true gutter must be at least min_gutter_height contiguous rows
+    cleaned_gutter = np.zeros(h, dtype=bool)
+    start_g = None
+    for y in range(h):
+        if is_gutter[y]:
+            if start_g is None:
+                start_g = y
+        else:
+            if start_g is not None:
+                if (y - start_g) >= min_gutter_height:
+                    cleaned_gutter[start_g:y] = True
+                start_g = None
+    if start_g is not None and (h - start_g) >= min_gutter_height:
+        cleaned_gutter[start_g:h] = True
+        
+    # 3. Extract content slices (non-gutter spans)
+    slices = []
+    in_panel = False
+    start_y = 0
+    for y in range(h):
+        if not cleaned_gutter[y] and not in_panel:
+            in_panel = True
+            start_y = y
+        elif cleaned_gutter[y] and in_panel:
+            in_panel = False
+            panel_h = y - start_y
+            if panel_h >= min_panel_height:
+                slices.append((start_y, y))
+    if in_panel:
+        panel_h = h - start_y
+        if panel_h >= min_panel_height:
+            slices.append((start_y, h))
+            
+    # 4. For each vertical slice, refine horizontal boundaries [x_min, x_max]
+    detected_boxes = []
+    for (y1, y2) in slices:
+        panel_slice = arr[y1:y2, :, :]
+        
+        # Check column variance within this slice
+        col_std = np.std(panel_slice, axis=0).mean(axis=1) # shape (w,)
+        col_mean = np.mean(panel_slice, axis=(0, 2))       # shape (w,)
+        
+        is_col_content = (col_std > 10.0) | ((col_mean < 245.0) & (col_mean > 20.0))
+        content_indices = np.where(is_col_content)[0]
+        
+        if len(content_indices) > 0:
+            x1 = max(0, int(content_indices[0]) - 5)
+            x2 = min(w, int(content_indices[-1]) + 5)
+        else:
+            x1 = 0
+            x2 = w
+            
+        box_w = x2 - x1
+        box_h = y2 - y1
+        if box_w >= min_panel_width and box_h >= min_panel_height:
+            detected_boxes.append({"x": x1, "y": y1, "w": box_w, "h": box_h})
+            
+    # 5. Sort reading order (top to bottom, left to right with tolerance)
+    # Group by vertical proximity (within 50px)
+    detected_boxes.sort(key=lambda b: (b["y"], b["x"]))
+    
+    panels = []
+    for idx, box in enumerate(detected_boxes, start=1):
+        panels.append({
+            "panel_id": f"panel_{idx:03d}",
+            "bbox": box,
+            "reading_order": idx,
+        })
+        
+    logger.info(f"Detected {len(panels)} panels in {image_path}")
+    return panels
+
+def crop_and_save_panels(image_path: Path, panels: List[Dict[str, Any]], output_dir: Path) -> List[Path]:
+    """Crops detected panels from the source image and saves them to output_dir."""
+    img = Image.open(image_path).convert("RGB")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    crop_paths = []
+    for p in panels:
+        bbox = p["bbox"]
+        x, y, w, h = bbox["x"], bbox["y"], bbox["w"], bbox["h"]
+        crop = img.crop((x, y, x + w, y + h))
+        crop_file = output_dir / f"{p['panel_id']}.png"
+        crop.save(crop_file, quality=95)
+        crop_paths.append(crop_file)
+        
+    return crop_paths
+
+==> ./workers/__init__.py <==
+"""M2A AI Workers package."""
+
+==> ./workflows/comfyui/hunyuan15_i2v.json <==
+{
+  "description": "TODO: Implement full HunyuanVideo 1.5 Image-to-Video workflow structure",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "inputs": {
+        "image": "panel.png"
+      }
+    },
+    {
+      "id": 2,
+      "type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "hunyuan15_model.safetensors"
+      }
+    },
+    {
+      "id": 3,
+      "type": "HunyuanImageToVideo",
+      "inputs": {
+        "prompt": "anime style, motion, high quality",
+        "image": ["1", 0],
+        "model": ["2", 0]
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "inputs": {
+        "video": ["3", 0],
+        "filename_prefix": "hunyuan15_output"
+      }
+    }
+  ]
+}
+
+==> ./workflows/comfyui/ltx23_i2v.json <==
+{
+  "description": "TODO: Implement full LTX-2.3 Image-to-Video workflow structure",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "inputs": {
+        "image": "panel.png"
+      }
+    },
+    {
+      "id": 2,
+      "type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "ltx23_model.safetensors"
+      }
+    },
+    {
+      "id": 3,
+      "type": "LTXImageToVideo",
+      "inputs": {
+        "prompt": "anime style, motion, high quality",
+        "image": ["1", 0],
+        "model": ["2", 0]
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "inputs": {
+        "video": ["3", 0],
+        "filename_prefix": "ltx23_output"
+      }
+    }
+  ]
+}
+
+==> ./workflows/comfyui/wan22_i2v.json <==
+{
+  "description": "TODO: Implement full Wan 2.2 Image-to-Video workflow structure",
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "inputs": {
+        "image": "panel.png"
+      }
+    },
+    {
+      "id": 2,
+      "type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "wan22_model.safetensors"
+      }
+    },
+    {
+      "id": 3,
+      "type": "WanImageToVideo",
+      "inputs": {
+        "prompt": "anime style, motion, high quality",
+        "image": ["1", 0],
+        "model": ["2", 0]
+      }
+    },
+    {
+      "id": 4,
+      "type": "SaveVideo",
+      "inputs": {
+        "video": ["3", 0],
+        "filename_prefix": "wan22_output"
+      }
+    }
+  ]
+}

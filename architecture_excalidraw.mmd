@@ -1,0 +1,183 @@
+%% =====================================================================
+%% MANHWA TO ANIME (M2A) - FULL ARCHITECTURE & PIPELINE WORKFLOW
+%% Formatted for Excalidraw (Insert -> Mermaid to Excalidraw)
+%% =====================================================================
+
+flowchart TD
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 0: INPUT & PHASE 0 FOUNDATIONS
+    %% -------------------------------------------------------------
+    subgraph SG_Phase0["PHASE 0: Foundations & Data Contracts (COMPLETED)"]
+        RawPages["Input Manhwa Strip<br/>(2-3 vertical webtoon pages: .png/.jpg)"]
+        GroundTruth["Eval Ground Truth<br/>(ground_truth.json + schema.json)"]
+        ConfigLoader["Config System<br/>(default.yaml + tiers: t0/t1/t2)"]
+        RunStateInit["RunState Initializer<br/>(UUID, ConfigHash, Timestamps)"]
+        
+        RawPages --> RunStateInit
+        GroundTruth -.-> RunStateInit
+        ConfigLoader --> RunStateInit
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 1: PHASE 1 INGEST, SLICING & BASELINE MOTION
+    %% -------------------------------------------------------------
+    subgraph SG_Phase1["PHASE 1: Ingest, Slicing & Baseline Motion Comic (COMPLETED)"]
+        NodeIngest["1. IngestNode<br/>(workers/ingest.py)<br/>Vertical Strip Stitching"]
+        StitchedImg["Artifact: stitched.png<br/>(Full concatenated strip)"]
+        NodeSegment["2. SegmentNode<br/>(workers/slicer.py)<br/>Gutter Variance Slicing"]
+        PanelCrops["Artifact: panels/panel_00X.png<br/>(BBox + Reading Order)"]
+        EvalF1["Segmentation Eval<br/>(eval_segmentation.py - F1 >= 0.90)"]
+        
+        NodeKenBurns["Ken Burns Engine<br/>(render_kenburns.py)<br/>Cubic Ease Pan & Zoom"]
+        NodeParallax["2.5D Parallax Engine<br/>(render_parallax.py)<br/>Depth Mask + Differential Motion"]
+        AssemblerP1["Timeline Assembler<br/>(assembler.py)<br/>Alpha Crossfade + Container Encoders"]
+        BaselineOut["Baseline Artifacts<br/>(baseline.avi / baseline.webp / .mp4)"]
+
+        RunStateInit --> NodeIngest
+        NodeIngest --> StitchedImg
+        StitchedImg --> NodeSegment
+        NodeSegment --> PanelCrops
+        PanelCrops -.-> EvalF1
+        
+        PanelCrops --> NodeKenBurns
+        PanelCrops --> NodeParallax
+        NodeKenBurns --> AssemblerP1
+        NodeParallax --> AssemblerP1
+        AssemblerP1 --> BaselineOut
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 2: PHASE 2 UNDERSTANDING & CLEAN PLATES
+    %% -------------------------------------------------------------
+    subgraph SG_Phase2["PHASE 2: Narrative Understanding & Clean Plates (IN PROGRESS)"]
+        NodeUnderstand["3. UnderstandNode<br/>(Qwen3-VL-8B / 4-bit / 2B VLM)"]
+        StructPanelJSON["Core Data Contract: PanelJSON<br/>- PanelID, BBox, ShotType<br/>- Characters Ref, Action<br/>- Dialogue Line, SFX<br/>- MotionPrompt, StyleAnchor"]
+        StructBible["Character Bible<br/>(CharacterEntry: Name, Crops, VoiceProfile)"]
+        
+        CP1{"Checkpoint CP1<br/>(Human Review in UI)<br/>Validate Text, Speaker, BBox"}
+        
+        NodeCleanPlates["4. CleanPlatesNode<br/>(LaMa Text Mask Inpainting)"]
+        CleanPlatesImg["Artifact: clean_plates/panel_00X_clean.png<br/>(Speech bubbles & text removed)"]
+
+        PanelCrops --> NodeUnderstand
+        NodeUnderstand --> StructPanelJSON
+        NodeUnderstand --> StructBible
+        StructPanelJSON --> CP1
+        CP1 -->|Approved / Edited| NodeCleanPlates
+        CleanPlatesImg -.-> CP1
+        NodeCleanPlates --> CleanPlatesImg
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 3: PHASE 3 VIDEO GENERATION & ROUTING
+    %% -------------------------------------------------------------
+    subgraph SG_Phase3["PHASE 3 & 5: Intelligent Shot Routing & Video Bake-off"]
+        NodeRoute["5. RouteNode (Shot Router)<br/>Rules + GPU Budget Allocation"]
+        
+        CP2{"Checkpoint CP2<br/>(Human Review in UI)<br/>Approve / Override Routes"}
+        
+        RouteHero["Route: HERO PANEL<br/>Close-up / High Motion / Action<br/>(Wan 2.2 / Hunyuan 1.5 / LTX-2.3)"]
+        RouteSubtle["Route: SUBTLE PANEL<br/>Medium Shot / Atmosphere<br/>(2.5D Parallax with Depth Mask)"]
+        RouteStatic["Route: STATIC PANEL<br/>Wide / Establishing Shot<br/>(Ken Burns Pan & Zoom)"]
+
+        ComfyUI["ComfyUI Model Server (:8188)<br/>Wan 2.2 TI2V-5B / I2V-A14B<br/>HunyuanVideo 1.5 / LTX-2.3"]
+        ParallaxGen["Parallax Generator<br/>(workers/render_parallax.py)"]
+        KenBurnsGen["Ken Burns Generator<br/>(workers/render_kenburns.py)"]
+        
+        NodeQC["6. QCNode (Quality Assurance Gate)<br/>- IdentitySimilarity >= 0.85<br/>- FlickerScore <= 0.15<br/>- NewTextCount == 0<br/>- MotionSanity: 0.1 to 0.9"]
+        
+        FallbackLogic{"QC Gate Pass?"}
+        FallbackDegrade["Degrade to Fallback Lane<br/>Wan2.2 -> Hunyuan -> Parallax -> KenBurns"]
+        AcceptedClips["Artifact: clips/panel_00X_accepted.mp4<br/>(Passed Clip Candidates)"]
+
+        CleanPlatesImg --> NodeRoute
+        CP1 --> NodeRoute
+        NodeRoute --> CP2
+        CP2 -->|Hero Beat| RouteHero
+        CP2 -->|Dialogue Beat| RouteSubtle
+        CP2 -->|Establishing| RouteStatic
+        
+        RouteHero --> ComfyUI
+        RouteSubtle --> ParallaxGen
+        RouteStatic --> KenBurnsGen
+        
+        ComfyUI --> NodeQC
+        ParallaxGen --> NodeQC
+        KenBurnsGen --> NodeQC
+        
+        NodeQC --> FallbackLogic
+        FallbackLogic -->|NO / Max Retries Exceeded| FallbackDegrade
+        FallbackDegrade --> ParallaxGen
+        FallbackLogic -->|YES| AcceptedClips
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 4: PHASE 4 AUDIO SYNTHESIS & FINAL ASSEMBLY
+    %% -------------------------------------------------------------
+    subgraph SG_Phase4["PHASE 4: Audio Synthesis & Final Composition"]
+        NodeTTS["7. TTSNode<br/>(MeloTTS Korean / Kokoro / Chatterbox)"]
+        AudioTracks["Artifact: audio/panel_00X_speaker.wav<br/>(Emotion-tagged speech files)"]
+        TimelineCalc["Timeline Sync & Pacing<br/>Duration = Max(VisualDuration, DialogueLength)"]
+        
+        NodeAssemble["8. AssembleNode<br/>(FFmpeg Video Engine / Pure Python)"]
+        FinalAnime["Final Anime Video<br/>(output/final_anime.mp4, 9:16 Portrait)<br/>- Crossfade Transitions<br/>- Subtitles & Overlays<br/>- Mixed Audio & Normalization"]
+
+        StructPanelJSON -.->|Dialogue Lines| NodeTTS
+        StructBible -.->|Voice Profiles| NodeTTS
+        NodeTTS --> AudioTracks
+        AudioTracks --> TimelineCalc
+        AcceptedClips --> TimelineCalc
+        TimelineCalc --> NodeAssemble
+        NodeAssemble --> FinalAnime
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 5: ORCHESTRATION & STATE MANAGEMENT
+    %% -------------------------------------------------------------
+    subgraph SG_Orchestrator["GO BACKEND ORCHESTRATOR & RESILIENCE (cmd/m2a & internal/)"]
+        GoCLI["Go CLI Entrypoint<br/>(cmd/m2a/main.go)"]
+        EngineDAG["Pipeline Engine State Machine<br/>(internal/pipeline/engine.go)<br/>Stage Transitions & Resume-from-Crash"]
+        StateDB["Artifact & State Store<br/>runs/<run_id>/state.json<br/>- CostLedger (GPU & Wall Sec)<br/>- StageHistory & Errors"]
+        
+        GoCLI --> EngineDAG
+        EngineDAG <--> StateDB
+        EngineDAG -.-> NodeIngest
+        EngineDAG -.-> NodeSegment
+        EngineDAG -.-> NodeUnderstand
+        EngineDAG -.-> NodeCleanPlates
+        EngineDAG -.-> NodeRoute
+        EngineDAG -.-> NodeQC
+        EngineDAG -.-> NodeTTS
+        EngineDAG -.-> NodeAssemble
+    end
+
+    %% -------------------------------------------------------------
+    %% SUBGRAPH 6: API SERVICES & HARDWARE COMPUTE TIERS
+    %% -------------------------------------------------------------
+    subgraph SG_Infrastructure["API SERVICES & COMPUTE TIERS"]
+        FastAPIWorker["FastAPI Worker Server (:8100)<br/>/segment | /understand | /inpaint | /tts"]
+        JobAPI["FastAPI Job Queue API<br/>POST /jobs | GET /jobs/{id} | Redis Queue"]
+        StreamlitUI["Streamlit Review App (:8501)<br/>CP1 Panel Editor + CP2 Route Approval"]
+        
+        Tier0["Tier T0: CPU Only<br/>Ken Burns + Qwen3-VL-2B + Kokoro"]
+        Tier1["Tier T1: 12-16GB VRAM (RTX 3080/4070)<br/>Wan2.2-Ti2V-5B + Qwen3-VL-8B-4bit + MeloTTS"]
+        Tier2["Tier T2: 24-48GB VRAM (RTX 4090/A5000)<br/>Wan2.2-I2V-A14B + Qwen3-VL-8B + MeloTTS"]
+
+        StreamlitUI --> JobAPI
+        JobAPI --> GoCLI
+        GoCLI <--> FastAPIWorker
+    end
+
+    %% Node Styling for Excalidraw Clarity
+    classDef done fill:#d4edda,stroke:#28a745,stroke-width:2px;
+    classDef inprogress fill:#fff3cd,stroke:#ffc107,stroke-width:2px;
+    classDef planned fill:#e2e3e5,stroke:#6c757d,stroke-width:2px;
+    classDef checkpoint fill:#f8d7da,stroke:#dc3545,stroke-width:2px;
+    classDef coreContract fill:#cce5ff,stroke:#004085,stroke-width:2px;
+
+    class RawPages,GroundTruth,ConfigLoader,RunStateInit,NodeIngest,StitchedImg,NodeSegment,PanelCrops,EvalF1,NodeKenBurns,NodeParallax,AssemblerP1,BaselineOut,GoCLI,EngineDAG,StateDB done;
+    class NodeUnderstand,StructBible,NodeCleanPlates,CleanPlatesImg,NodeRoute,RouteHero,RouteSubtle,RouteStatic,NodeQC,FallbackLogic,FallbackDegrade,AcceptedClips,FastAPIWorker,JobAPI,StreamlitUI inprogress;
+    class NodeTTS,AudioTracks,TimelineCalc,NodeAssemble,FinalAnime,ComfyUI planned;
+    class CP1,CP2 checkpoint;
+    class StructPanelJSON coreContract;
