@@ -25,6 +25,7 @@ from workers.assembler import decode_video_frames, encode_mjpeg_avi
 from workers.qc_metrics import compute_clip_qc_metrics
 from workers.render_kenburns import generate_kenburns_frames
 from workers.render_parallax import generate_parallax_frames
+from workers.video.cache import ClipCache
 from workers.video.comfy_client import ComfyClient
 from workers.video.provider import ComfyVideoProvider, load_model_specs
 
@@ -200,6 +201,7 @@ def run_bakeoff(
             provider = ComfyVideoProvider(
                 spec=specs[mid],
                 client=comfy_client,
+                cache=ClipCache(out_dir / ".clip_cache"),
             )
 
         for p, seed in pending:

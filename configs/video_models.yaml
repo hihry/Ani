@@ -6,10 +6,10 @@ models:
     native_fps: 16
     frame_step: 4
     frame_offset: 1
-    max_frames: 81
+    max_frames: 49
     resolution_buckets:
       - [480, 832]
-    steps: 20
+    steps: 12
     cfg: 5.0
     sampler: uni_pc
     scheduler: simple

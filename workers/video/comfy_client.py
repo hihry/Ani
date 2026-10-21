@@ -50,7 +50,7 @@ class ComfyClient:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:8188",
-        timeout_s: float = 900.0,
+        timeout_s: float = 1800.0,
         poll_interval_s: float = 0.05,
         http_client: Optional[httpx.Client] = None,
     ) -> None:

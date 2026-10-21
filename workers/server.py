@@ -274,9 +274,14 @@ def _probe_video_providers() -> Dict[str, str]:
         "parallax": "ready",
     }
     if not comfy_url:
-        for mid, spec in specs.items():
-            providers[mid] = "disabled" if not spec.enabled else "standby"
-        return providers
+        import socket
+        try:
+            with socket.create_connection(("127.0.0.1", 8188), timeout=0.05):
+                comfy_url = "http://127.0.0.1:8188"
+        except OSError:
+            for mid, spec in specs.items():
+                providers[mid] = "disabled" if not spec.enabled else "standby"
+            return providers
 
     client = ComfyClient(base_url=comfy_url)
     for mid, spec in specs.items():
@@ -302,6 +307,13 @@ def health() -> HealthResponse:
         gpu_avail = bool(torch.cuda.is_available())
     except ImportError:
         pass
+    v_providers = _probe_video_providers()
+    if not gpu_avail:
+        gpu_avail = any(
+            v == "ready"
+            for k, v in v_providers.items()
+            if k not in ("kenburns", "parallax")
+        )
     return HealthResponse(
         status="ok",
         device="cuda" if gpu_avail else "cpu",
@@ -315,7 +327,7 @@ def health() -> HealthResponse:
             "tts": "ready",
             "assemble": "ready",
         },
-        video_providers=_probe_video_providers(),
+        video_providers=v_providers,
         gpu_available=gpu_avail,
     )
 

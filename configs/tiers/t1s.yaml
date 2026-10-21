@@ -3,6 +3,7 @@ generation:
   primary_model: "wan22-5b-gguf-q4"
   video_primary: "wan22-5b-gguf-q4"
   video_fallback: "parallax"
+  comfy_url: "http://127.0.0.1:8188"
   fallback_models:
     - "parallax"
     - "kenburns"
