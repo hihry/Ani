@@ -1,0 +1,126 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "hunyuan_video_image_to_video_720p_bf16.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "_meta": {
+      "title": "Load HunyuanVideo I2V"
+    }
+  },
+  "2": {
+    "class_type": "DualCLIPLoader",
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "llava_llama3_fp8_scaled.safetensors",
+      "type": "hunyuan_video"
+    },
+    "_meta": {
+      "title": "Load Hunyuan Text Encoders"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "hunyuan_video_vae_bf16.safetensors"
+    },
+    "_meta": {
+      "title": "Load Hunyuan VAE"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input.png"
+    },
+    "_meta": {
+      "title": "M2A_IMAGE"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "2D anime style, subtle motion, consistent character line art",
+      "clip": ["2", 0]
+    },
+    "_meta": {
+      "title": "M2A_POS"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "text, speech bubble, watermark, subtitles, deformed face, extra limbs, flicker",
+      "clip": ["2", 0]
+    },
+    "_meta": {
+      "title": "M2A_NEG"
+    }
+  },
+  "7": {
+    "class_type": "HunyuanImageToVideo",
+    "inputs": {
+      "positive": ["5", 0],
+      "vae": ["3", 0],
+      "start_image": ["4", 0],
+      "width": 544,
+      "height": 960,
+      "length": 49,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "M2A_LATENT"
+    }
+  },
+  "8": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 42
+    },
+    "_meta": {
+      "title": "M2A_SEED"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["7", 0],
+      "negative": ["6", 0],
+      "latent_image": ["7", 1],
+      "seed": 42,
+      "steps": 20,
+      "cfg": 6.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "M2A_SAMPLER"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["9", 0],
+      "vae": ["3", 0]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "11": {
+    "class_type": "SaveWEBM",
+    "inputs": {
+      "images": ["10", 0],
+      "filename_prefix": "m2a_hunyuan15",
+      "codec": "vp9",
+      "fps": 24.0,
+      "crf": 18.0
+    },
+    "_meta": {
+      "title": "M2A_OUTPUT"
+    }
+  }
+}

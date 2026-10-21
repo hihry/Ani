@@ -1,0 +1,137 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "_meta": {
+      "title": "Load Wan2.2 A14B High-Noise UNET"
+    }
+  },
+  "2": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["1", 0],
+      "lora_name": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "Load LightX2V 4-Step LoRA"
+    }
+  },
+  "3": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan"
+    },
+    "_meta": {
+      "title": "Load UMT5 Text Encoder"
+    }
+  },
+  "4": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan_2.1_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load Wan VAE"
+    }
+  },
+  "5": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input.png"
+    },
+    "_meta": {
+      "title": "M2A_IMAGE"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "2D anime style, subtle motion, consistent character line art",
+      "clip": ["3", 0]
+    },
+    "_meta": {
+      "title": "M2A_POS"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "text, speech bubble, watermark, subtitles, deformed face, extra limbs, flicker",
+      "clip": ["3", 0]
+    },
+    "_meta": {
+      "title": "M2A_NEG"
+    }
+  },
+  "8": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "vae": ["4", 0],
+      "start_image": ["5", 0],
+      "width": 720,
+      "height": 1280,
+      "length": 81,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "M2A_LATENT"
+    }
+  },
+  "9": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 42
+    },
+    "_meta": {
+      "title": "M2A_SEED"
+    }
+  },
+  "10": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["2", 0],
+      "positive": ["8", 0],
+      "negative": ["8", 1],
+      "latent_image": ["8", 2],
+      "seed": 42,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "M2A_SAMPLER"
+    }
+  },
+  "11": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["10", 0],
+      "vae": ["4", 0]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "12": {
+    "class_type": "SaveWEBM",
+    "inputs": {
+      "images": ["11", 0],
+      "filename_prefix": "m2a_wan22_a14b_lightning",
+      "codec": "vp9",
+      "fps": 16.0,
+      "crf": 18.0
+    },
+    "_meta": {
+      "title": "M2A_OUTPUT"
+    }
+  }
+}

@@ -319,18 +319,54 @@ func (e *Engine) syncCheckpoint1Edits(state *model.RunState) {
 }
 
 // syncCheckpoint2Edits reloads any human edits made to routes/routing_plan.json before resuming CP2.
+// Supports both the Phase 3 structured RoutingPlan object ({"panels": [...]}) and legacy []model.PanelJSON or map[string]Route formats.
 func (e *Engine) syncCheckpoint2Edits(state *model.RunState) {
 	planFile := filepath.Join(e.runDir, "routes", "routing_plan.json")
 	raw, err := os.ReadFile(planFile)
 	if err != nil {
 		return
 	}
+
 	var editedPanels []model.PanelJSON
 	if err := json.Unmarshal(raw, &editedPanels); err == nil && len(editedPanels) == len(state.Panels) {
 		for i := range editedPanels {
 			editedPanels[i].DurationS = model.ClampDuration(editedPanels[i].DurationS)
 			if editedPanels[i].Validate() == nil {
 				state.Panels[i] = editedPanels[i]
+			}
+		}
+		return
+	}
+
+	var structured RoutingPlan
+	if err := json.Unmarshal(raw, &structured); err == nil && len(structured.Panels) > 0 {
+		byID := make(map[string]PanelRoutingDecision, len(structured.Panels))
+		for _, d := range structured.Panels {
+			byID[d.PanelID] = d
+		}
+		for i := range state.Panels {
+			if d, ok := byID[state.Panels[i].PanelID]; ok {
+				if d.Route == model.RouteI2V || d.Route == model.RouteParallax || d.Route == model.RouteKenBurns {
+					state.Panels[i].Route = d.Route
+				}
+				if d.DurationS > 0 {
+					state.Panels[i].DurationS = model.ClampDuration(d.DurationS)
+				}
+				if d.MotionPrompt != "" {
+					state.Panels[i].MotionPrompt = d.MotionPrompt
+				}
+			}
+		}
+		return
+	}
+
+	var routeMap map[string]model.AnimationRoute
+	if err := json.Unmarshal(raw, &routeMap); err == nil && len(routeMap) > 0 {
+		for i := range state.Panels {
+			if r, ok := routeMap[state.Panels[i].PanelID]; ok {
+				if r == model.RouteI2V || r == model.RouteParallax || r == model.RouteKenBurns {
+					state.Panels[i].Route = r
+				}
 			}
 		}
 	}

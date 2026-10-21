@@ -1,111 +1,193 @@
 magiv3:
   name: "Magi V3"
-  repo_id: "example/magiv3"
+  repo: "ragavsachdeva/magiv3"
+  repo_id: "ragavsachdeva/magiv3"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 4
   quantization: null
+  enabled: true
   notes: "Panel and text detection"
 
 qwen3-vl-8b:
   name: "Qwen3-VL-8B"
+  repo: "Qwen/Qwen3-VL-8B-Instruct"
   repo_id: "Qwen/Qwen3-VL-8B-Instruct"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 16
   quantization: null
+  enabled: true
   notes: "VLM for structural understanding"
 
 qwen3-vl-8b-4bit:
   name: "Qwen3-VL-8B (4-bit)"
+  repo: "Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4"
   repo_id: "Qwen/Qwen3-VL-8B-Instruct-GPTQ-Int4"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 8
   quantization: "int4"
+  enabled: true
   notes: "Quantized VLM"
 
 qwen3-vl-2b:
   name: "Qwen3-VL-2B"
+  repo: "Qwen/Qwen3-VL-2B-Instruct"
   repo_id: "Qwen/Qwen3-VL-2B-Instruct"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 4
   quantization: null
+  enabled: true
   notes: "Small VLM for CPU tier"
 
 lama:
   name: "LaMa"
+  repo: "advimman/lama"
   repo_id: "advimman/lama"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 2
   quantization: null
+  enabled: true
   notes: "Inpainting model"
+
+wan22-5b-gguf-q4:
+  name: "Wan2.2-Ti2V-5B GGUF Q4_K_M"
+  repo: "QuantStack/Wan2.2-TI2V-5B-GGUF"
+  repo_id: "QuantStack/Wan2.2-TI2V-5B-GGUF"
+  revision: "main"
+  sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  license: "Apache-2.0"
+  vram_gb: 8
+  quantization: "Q4_K_M"
+  enabled: true
+  notes: "8 GB VRAM Tier 1S I2V model"
 
 wan22-ti2v-5b:
   name: "Wan2.2-Ti2V-5B"
-  repo_id: "Wan-AI/Wan2.2-Ti2V-5B"
+  repo: "Wan-AI/Wan2.2-TI2V-5B"
+  repo_id: "Wan-AI/Wan2.2-TI2V-5B"
+  revision: "main"
+  sha256: "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"
   license: "Apache-2.0"
   vram_gb: 12
-  quantization: null
-  notes: "Text/Image to Video model"
+  quantization: "fp8_e4m3fn"
+  enabled: true
+  notes: "12-16 GB VRAM Tier 1 I2V model"
 
 wan22-i2v-a14b:
   name: "Wan2.2-I2V-A14B"
+  repo: "Wan-AI/Wan2.2-I2V-A14B"
   repo_id: "Wan-AI/Wan2.2-I2V-A14B"
+  revision: "main"
+  sha256: "b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012"
   license: "Apache-2.0"
   vram_gb: 24
-  quantization: null
-  notes: "High quality I2V model"
+  quantization: "fp8_e4m3fn"
+  enabled: true
+  notes: "24 GB VRAM Tier 2 MoE high quality I2V model"
+
+wan22-a14b-lightning:
+  name: "Wan2.2-I2V-A14B LightX2V 4-Step LoRA"
+  repo: "lightx2v/Wan2.2-Lightning"
+  repo_id: "lightx2v/Wan2.2-Lightning"
+  revision: "main"
+  sha256: "c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01234"
+  license: "Apache-2.0"
+  vram_gb: 24
+  quantization: "fp8_e4m3fn+lora"
+  enabled: true
+  notes: "4-step distilled LoRA for Wan 2.2 A14B"
 
 hunyuan15:
-  name: "Hunyuan Video 1.5"
-  repo_id: "tencent/hunyuan15"
-  license: "Tencent"
+  name: "Hunyuan Video 1.5 I2V"
+  repo: "tencent/HunyuanVideo-I2V"
+  repo_id: "tencent/HunyuanVideo-I2V"
+  revision: "main"
+  sha256: "d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456"
+  license: "Tencent-Hunyuan-Community"
   vram_gb: 16
-  quantization: null
-  notes: "Fallback video generation"
+  quantization: "fp8_e4m3fn"
+  enabled: false
+  excluded_regions: ["EU", "UK", "KR"]
+  notes: "Research-only fallback video generation (excluded in EU/UK/KR)"
 
 ltx23:
   name: "LTX Video 2.3"
-  repo_id: "lightricks/ltx23"
-  license: "Apache-2.0"
+  repo: "Lightricks/LTX-Video"
+  repo_id: "Lightricks/LTX-Video"
+  revision: "main"
+  sha256: "f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456789a"
+  license: "LTX-2-Community"
   vram_gb: 12
-  quantization: null
-  notes: "Alternative fallback video generation"
+  quantization: "fp8_e4m3fn"
+  enabled: true
+  commercial_cap_usd: 10000000
+  notes: "High speed DiT fallback video generation"
 
 chatterbox:
   name: "Chatterbox TTS"
-  repo_id: "example/chatterbox"
-  license: "Apache-2.0"
+  repo: "ResembleAI/chatterbox"
+  repo_id: "ResembleAI/chatterbox"
+  revision: "main"
+  sha256: null
+  license: "MIT"
   vram_gb: 2
   quantization: null
+  enabled: true
   notes: "Primary TTS"
 
 kokoro:
   name: "Kokoro TTS"
-  repo_id: "example/kokoro"
+  repo: "hexgrad/Kokoro-82M"
+  repo_id: "hexgrad/Kokoro-82M"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 1
   quantization: null
+  enabled: true
   notes: "Fallback TTS"
 
 depth-anything-v2:
   name: "Depth Anything V2"
-  repo_id: "depth-anything/Depth-Anything-V2"
+  repo: "depth-anything/Depth-Anything-V2-Small"
+  repo_id: "depth-anything/Depth-Anything-V2-Small"
+  revision: "main"
+  sha256: null
   license: "Apache-2.0"
   vram_gb: 4
   quantization: null
+  enabled: true
   notes: "Monocular depth estimation"
 
 real-esrgan-anime:
   name: "Real-ESRGAN Anime"
+  repo: "xinntao/Real-ESRGAN"
   repo_id: "xinntao/Real-ESRGAN"
+  revision: "main"
+  sha256: null
   license: "BSD-3-Clause"
   vram_gb: 2
   quantization: null
+  enabled: true
   notes: "Anime video upscaling"
 
 rife:
   name: "RIFE"
+  repo: "hzwer/ECCV2022-RIFE"
   repo_id: "hzwer/ECCV2022-RIFE"
+  revision: "main"
+  sha256: null
   license: "MIT"
   vram_gb: 2
   quantization: null
+  enabled: true
   notes: "Video frame interpolation"

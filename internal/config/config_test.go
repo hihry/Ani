@@ -111,3 +111,25 @@ composition:
 		t.Fatal("expected error loading nonexistent tier file, got nil")
 	}
 }
+
+func TestLoadAllTiers(t *testing.T) {
+	defaultPath := filepath.Join("..", "..", "configs", "default.yaml")
+	for _, tier := range []string{"t0", "t1s", "t1", "t2"} {
+		tierPath := filepath.Join("..", "..", "configs", "tiers", tier+".yaml")
+		cfg, err := config.Load(defaultPath, tierPath)
+		if err != nil {
+			t.Fatalf("failed to load tier %s: %v", tier, err)
+		}
+		if cfg.Generation.EffectivePrimaryModel() == "" {
+			t.Fatalf("tier %s has empty primary model", tier)
+		}
+		if tier != "t0" {
+			if cfg.Cost.I2VBudgetS <= 0 {
+				t.Errorf("tier %s expected positive cost.i2v_budget_s, got %f", tier, cfg.Cost.I2VBudgetS)
+			}
+			if len(cfg.QC.PerRoute) == 0 {
+				t.Errorf("tier %s expected non-empty qc.per_route thresholds", tier)
+			}
+		}
+	}
+}

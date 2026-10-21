@@ -458,3 +458,64 @@ func TestCheckpoint2PreservesTTSDurationOnResume(t *testing.T) {
 		t.Fatalf("expected DurationS=6.4 preserved after CP2 resume, got %.2f", state.Panels[0].DurationS)
 	}
 }
+
+func TestRouteNodeBudgetKnapsackAndHeroScore(t *testing.T) {
+	runDir := t.TempDir()
+	cfg := testConfig()
+	cfg.General.RunDir = runDir
+	cfg.Generation.PrimaryModel = "wan22-ti2v-5b"
+	cfg.Generation.MaxI2VPanels = 2
+	cfg.Cost.I2VBudgetS = 120.0
+
+	state := model.NewRunState([]string{"p1.png"}, "ko", "t1")
+	p1 := model.NewPanelJSON("panel_001", model.BBox{X: 0, Y: 0, W: 720, H: 900})
+	p1.Shot = model.ShotCloseUp
+	p1.MotionIntensity = 0.85
+	p1.DurationS = 2.5
+
+	p2 := model.NewPanelJSON("panel_002", model.BBox{X: 0, Y: 900, W: 720, H: 900})
+	p2.Shot = model.ShotSplash
+	p2.MotionIntensity = 0.90
+	p2.DurationS = 2.5
+
+	p3 := model.NewPanelJSON("panel_003", model.BBox{X: 0, Y: 1800, W: 720, H: 900})
+	p3.Shot = model.ShotCloseUp
+	p3.MotionIntensity = 0.75
+	p3.DurationS = 2.5
+
+	p4 := model.NewPanelJSON("panel_004", model.BBox{X: 0, Y: 2700, W: 720, H: 400})
+	p4.Shot = model.ShotWide
+	p4.MotionIntensity = 0.15
+	p4.DurationS = 2.5
+
+	state.Panels = []model.PanelJSON{p1, p2, p3, p4}
+
+	if err := pipeline.RouteNode(context.Background(), state, cfg); err != nil {
+		t.Fatalf("RouteNode failed: %v", err)
+	}
+
+	i2vCount := 0
+	for _, p := range state.Panels {
+		if p.Route == model.RouteI2V {
+			i2vCount++
+		}
+	}
+	if i2vCount != 2 {
+		t.Fatalf("expected MaxI2VPanels=2 to cap I2V panels at 2 (out of 3 hero panels), got %d", i2vCount)
+	}
+	if state.Panels[3].Route != model.RouteKenBurns {
+		t.Fatalf("expected low-motion wide panel_004 to route to kenburns, got %s", state.Panels[3].Route)
+	}
+
+	planBytes, err := os.ReadFile(filepath.Join(runDir, "routes", "routing_plan.json"))
+	if err != nil {
+		t.Fatalf("read routing_plan.json failed: %v", err)
+	}
+	var plan pipeline.RoutingPlan
+	if err := json.Unmarshal(planBytes, &plan); err != nil {
+		t.Fatalf("unmarshal RoutingPlan failed: %v", err)
+	}
+	if len(plan.Panels) != 4 || plan.MaxI2VPanels != 2 {
+		t.Fatalf("unexpected RoutingPlan: %+v", plan)
+	}
+}

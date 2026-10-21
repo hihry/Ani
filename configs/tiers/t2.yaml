@@ -1,10 +1,56 @@
-# T2: 24-48 GB GPU (e.g., RTX 4090, A5000, rented cloud)
+# T2: 24-48 GB GPU (e.g., RTX 4090, RTX 3090, A5000, rented cloud)
 generation:
   primary_model: "wan22-i2v-a14b"
+  video_primary: "wan22-i2v-a14b"
+  video_fallback: "wan22-ti2v-5b"
   fallback_models:
     - "wan22-ti2v-5b"
-    - "hunyuan15"
+    - "ltx23-fp8"
+    - "parallax"
+    - "kenburns"
   max_retries: 3
+  max_clip_duration_s: 5.0
+  max_i2v_clip_s: 5.0
+  max_i2v_panels: 6
+  max_i2v_takes: 2
+  calibration_file: "configs/calibration/t2.yaml"
 
 understanding:
   vlm: "qwen3-vl-8b"
+
+cost:
+  i2v_budget_s: 240.0
+
+qc:
+  identity_threshold: 0.85
+  flicker_threshold: 0.15
+  max_new_text_lines: 0
+  require_text_check: true
+  per_route:
+    i2v:
+      min_identity_similarity: 0.78
+      max_flicker_score: 0.12
+      min_motion_score: 0.015
+      max_motion_score: 0.98
+      max_warp_error: 0.10
+      min_first_frame_fidelity: 0.80
+      max_style_drift: 0.22
+      max_retries: 2
+    parallax:
+      min_identity_similarity: 0.85
+      max_flicker_score: 0.15
+      min_motion_score: 0.01
+      max_motion_score: 0.98
+      max_warp_error: 0.10
+      min_first_frame_fidelity: 0.82
+      max_style_drift: 0.20
+      max_retries: 1
+    kenburns:
+      min_identity_similarity: 0.85
+      max_flicker_score: 0.15
+      min_motion_score: 0.01
+      max_motion_score: 0.98
+      max_warp_error: 0.10
+      min_first_frame_fidelity: 0.85
+      max_style_drift: 0.18
+      max_retries: 0

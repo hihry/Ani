@@ -21,7 +21,7 @@ existing_runs = sorted(
 ) if RUNS_DIR.exists() else []
 
 selected_run_id = st.sidebar.selectbox("Select Run ID", options=[""] + existing_runs)
-compute_tier = st.sidebar.selectbox("Compute Tier", ["t0", "t1", "t2"], index=1)
+compute_tier = st.sidebar.selectbox("Compute Tier", ["t0", "t1s", "t1", "t2"], index=2)
 
 if selected_run_id:
     run_dir = RUNS_DIR / selected_run_id

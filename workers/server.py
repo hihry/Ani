@@ -3,11 +3,15 @@
 The Go backend calls these endpoints over HTTP (:8100) to delegate AI inference and
 rendering without paying model cold-start overhead on every stage.
 """
+from __future__ import annotations
+
+from contextlib import contextmanager
 import logging
 import os
 import threading
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -21,6 +25,8 @@ try:
         assemble_from_run_state,
         render_single_panel_clip,
     )
+    from workers.video.comfy_client import ComfyClient
+    from workers.video.provider import load_model_specs
 except ImportError:
     from ingest import stitch_vertical_pages
     from slicer import crop_and_save_panels, detect_panels_gutter
@@ -30,8 +36,10 @@ except ImportError:
         assemble_from_run_state,
         render_single_panel_clip,
     )
+    from video.comfy_client import ComfyClient
+    from video.provider import load_model_specs
 
-app = FastAPI(title="M2A AI Worker", version="0.2.0")
+app = FastAPI(title="M2A AI Worker", version="0.3.0")
 logger = logging.getLogger("m2a.worker")
 
 
@@ -39,19 +47,52 @@ class ModelResidencyManager:
     """Enforces single-heavy-model residency on GPU to prevent VRAM OOM."""
 
     def __init__(self) -> None:
+        self._lock = threading.RLock()
         self.resident_model: Optional[str] = None
         self.light_models: set[str] = {"opencv-slicer", "lama-telea"}
+        self.last_comfy_url: str = os.environ.get("M2A_COMFY_URL", "")
 
-    def activate(self, model_name: str) -> None:
-        if self.resident_model and self.resident_model != model_name:
-            logger.info(f"Unloading heavy model {self.resident_model} before loading {model_name}")
-            try:
-                import torch  # type: ignore
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-        self.resident_model = model_name
+    def activate(self, model_name: str, comfy_url: str = "") -> None:
+        with self._lock:
+            if comfy_url:
+                self.last_comfy_url = comfy_url
+            if self.resident_model and self.resident_model != model_name:
+                logger.info(f"Unloading heavy model {self.resident_model} before loading {model_name}")
+                if self.resident_model.startswith("comfyui") and self.last_comfy_url:
+                    try:
+                        ComfyClient(base_url=self.last_comfy_url).free_memory()
+                    except Exception:
+                        pass
+                self._empty_torch_cache()
+            self.resident_model = model_name
+
+    @contextmanager
+    def acquire(self, owner: str, comfy_url: str = "") -> Iterator[None]:
+        self.activate(owner, comfy_url=comfy_url)
+        try:
+            yield
+        finally:
+            pass
+
+    def free_all(self, comfy_url: str = "") -> None:
+        with self._lock:
+            eff_url = comfy_url or self.last_comfy_url or os.environ.get("M2A_COMFY_URL", "")
+            if eff_url:
+                try:
+                    ComfyClient(base_url=eff_url).free_memory()
+                except Exception:
+                    pass
+            self._empty_torch_cache()
+            self.resident_model = None
+
+    @staticmethod
+    def _empty_torch_cache() -> None:
+        try:
+            import torch  # type: ignore
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
 
     def loaded_models(self) -> List[str]:
         models = sorted(self.light_models)
@@ -62,6 +103,8 @@ class ModelResidencyManager:
 
 RESIDENCY = ModelResidencyManager()
 HEAVY_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.environ.get("M2A_HEAVY_SLOTS", "2"))))
+JOBS_LOCK = threading.Lock()
+RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
 
 
 # --- Request/Response Models ---
@@ -154,13 +197,33 @@ class RenderRequest(BaseModel):
     fps: int = 24
     width: int = 720
     height: int = 1280
+    panel_id: str = ""
+    model_id: str = ""
+    seed: int = 42
+    action_prompt: str = ""
+    motion_type: str = ""
+    emotion: str = "neutral"
+    comfy_url: str = ""
 
 
 class RenderResponse(BaseModel):
     clip_path: str
+    raw_clip_path: str = ""
     frames_count: int
     duration_s: float
     route_used: str
+    model_id: str = ""
+    seed: int = 42
+    positive_prompt: str = ""
+    negative_prompt: str = ""
+    native_width: int = 0
+    native_height: int = 0
+    native_frames: int = 0
+    native_fps: int = 0
+    gen_seconds: float = 0.0
+    peak_vram_gb: float = 0.0
+    cached: bool = False
+    error: str = ""
     qc_scores: Dict[str, Any]
 
 
@@ -196,15 +259,43 @@ class AssembleResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    loaded_models: List[str]
-    gpu_available: bool
+    device: str = "cpu"
+    loaded_models: List[str] = Field(default_factory=list)
+    workers: Dict[str, str] = Field(default_factory=dict)
+    video_providers: Dict[str, str] = Field(default_factory=dict)
+    gpu_available: bool = False
+
+
+def _probe_video_providers() -> Dict[str, str]:
+    specs = load_model_specs()
+    comfy_url = os.environ.get("M2A_COMFY_URL", "").strip()
+    providers: Dict[str, str] = {
+        "kenburns": "ready",
+        "parallax": "ready",
+    }
+    if not comfy_url:
+        for mid, spec in specs.items():
+            providers[mid] = "disabled" if not spec.enabled else "standby"
+        return providers
+
+    client = ComfyClient(base_url=comfy_url)
+    for mid, spec in specs.items():
+        if not spec.enabled:
+            providers[mid] = "disabled"
+            continue
+        try:
+            client.probe(required_nodes=spec.required_nodes)
+            providers[mid] = "ready"
+        except Exception as exc:
+            providers[mid] = f"unavailable: {exc}"
+    return providers
 
 
 # --- Endpoints ---
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    """Health check — reports loaded models and GPU status."""
+    """Health check — reports loaded models, GPU status, and ComfyUI video provider readiness."""
     gpu_avail = False
     try:
         import torch  # type: ignore
@@ -213,9 +304,28 @@ def health() -> HealthResponse:
         pass
     return HealthResponse(
         status="ok",
+        device="cuda" if gpu_avail else "cpu",
         loaded_models=RESIDENCY.loaded_models(),
+        workers={
+            "ingest": "ready",
+            "segment": "ready",
+            "understand": "ready",
+            "inpaint": "ready",
+            "render": "ready",
+            "tts": "ready",
+            "assemble": "ready",
+        },
+        video_providers=_probe_video_providers(),
         gpu_available=gpu_avail,
     )
+
+
+@app.post("/gpu/free")
+def free_gpu(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Unloads resident GPU models and tells ComfyUI to free VRAM."""
+    comfy_url = str((payload or {}).get("comfy_url") or "")
+    RESIDENCY.free_all(comfy_url=comfy_url)
+    return {"status": "ok"}
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -263,15 +373,15 @@ def understand_panel(req: UnderstandRequest) -> UnderstandResponse:
     if not img_path.exists():
         raise HTTPException(status_code=404, detail=f"Image not found: {req.panel_image_path}")
 
-    RESIDENCY.activate("qwen3-vl")
-    sem = analyze_panel_semantics(
-        panel_image_path=img_path,
-        panel_id=req.panel_id,
-        language=req.language,
-        reading_order=req.reading_order,
-        crops_dir=Path(req.crops_dir) if req.crops_dir else None,
-        annotated_path=Path(req.annotated_path) if req.annotated_path else None,
-    )
+    with RESIDENCY.acquire("qwen3-vl"):
+        sem = analyze_panel_semantics(
+            panel_image_path=img_path,
+            panel_id=req.panel_id,
+            language=req.language,
+            reading_order=req.reading_order,
+            crops_dir=Path(req.crops_dir) if req.crops_dir else None,
+            annotated_path=Path(req.annotated_path) if req.annotated_path else None,
+        )
     return UnderstandResponse(**sem)
 
 
@@ -290,39 +400,124 @@ def inpaint_text(req: InpaintRequest) -> InpaintResponse:
     return InpaintResponse(output_path=str(out_path.as_posix()), success=True)
 
 
-@app.post("/render", response_model=RenderResponse)
-def render_panel(req: RenderRequest) -> RenderResponse:
-    """Render a panel clip using Ken Burns, 2.5D Parallax, or I2V and compute QC metrics."""
+def _execute_render_request(req: RenderRequest, cancel_event: Optional[threading.Event] = None) -> RenderResponse:
     img_path = Path(req.image_path)
     if not img_path.exists():
         raise HTTPException(status_code=404, detail=f"Image not found: {req.image_path}")
 
     with HEAVY_SEMAPHORE:
-        if req.route == "i2v":
-            RESIDENCY.activate("wan22-i2v")
-        res = render_single_panel_clip(
-            image_path=img_path,
-            output_path=Path(req.output_path),
-            route=req.route,
-            shot_type=req.shot_type,
-            duration_s=req.duration_s,
-            fps=req.fps,
-            target_res=(req.width, req.height),
-        )
+        owner = f"comfyui:{req.model_id or 'wan22'}" if req.route == "i2v" else f"cpu:{req.route}"
+        with RESIDENCY.acquire(owner, comfy_url=req.comfy_url):
+            res = render_single_panel_clip(
+                image_path=img_path,
+                output_path=Path(req.output_path),
+                route=req.route,
+                shot_type=req.shot_type,
+                duration_s=req.duration_s,
+                fps=req.fps,
+                target_res=(req.width, req.height),
+                panel_id=req.panel_id,
+                model_id=req.model_id,
+                seed=req.seed,
+                action_prompt=req.action_prompt,
+                motion_type_override=req.motion_type,
+                emotion=req.emotion,
+                comfy_url=req.comfy_url,
+                cancel_event=cancel_event,
+            )
     return RenderResponse(**res)
+
+
+@app.post("/render", response_model=RenderResponse)
+def render_panel(req: RenderRequest) -> RenderResponse:
+    """Render a panel clip synchronously using Ken Burns, 2.5D Parallax, or I2V and compute QC metrics."""
+    return _execute_render_request(req)
+
+
+@app.post("/render/jobs")
+def create_render_job(req: RenderRequest) -> Dict[str, Any]:
+    """Submits an asynchronous panel render job (used by Go WorkerClient for long-running I2V clips)."""
+    img_path = Path(req.image_path)
+    if not img_path.exists():
+        raise HTTPException(status_code=404, detail=f"Image not found: {req.image_path}")
+
+    job_id = uuid.uuid4().hex
+    cancel_ev = threading.Event()
+    job_entry: Dict[str, Any] = {
+        "job_id": job_id,
+        "status": "queued",
+        "result": None,
+        "error": "",
+        "cancel_event": cancel_ev,
+        "comfy_url": req.comfy_url or os.environ.get("M2A_COMFY_URL", ""),
+    }
+    with JOBS_LOCK:
+        RENDER_JOBS[job_id] = job_entry
+
+    def _runner() -> None:
+        with JOBS_LOCK:
+            if job_entry["status"] == "cancelled":
+                return
+            job_entry["status"] = "running"
+        try:
+            res = _execute_render_request(req, cancel_event=cancel_ev)
+            with JOBS_LOCK:
+                if job_entry["status"] != "cancelled":
+                    job_entry["result"] = res.model_dump()
+                    job_entry["status"] = "done"
+        except Exception as exc:
+            with JOBS_LOCK:
+                if job_entry["status"] != "cancelled":
+                    job_entry["error"] = str(exc)
+                    job_entry["status"] = "failed"
+
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/render/jobs/{job_id}")
+def get_render_job(job_id: str) -> Dict[str, Any]:
+    with JOBS_LOCK:
+        job = RENDER_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Render job {job_id} not found")
+        return {
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "result": job["result"],
+            "error": job["error"],
+        }
+
+
+@app.delete("/render/jobs/{job_id}")
+def cancel_render_job(job_id: str) -> Dict[str, Any]:
+    with JOBS_LOCK:
+        job = RENDER_JOBS.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Render job {job_id} not found")
+        job["cancel_event"].set()
+        job["status"] = "cancelled"
+        comfy_url = job.get("comfy_url", "")
+    if comfy_url:
+        try:
+            ComfyClient(base_url=comfy_url).interrupt()
+        except Exception:
+            pass
+    return {"job_id": job_id, "status": "cancelled"}
 
 
 @app.post("/tts", response_model=TTSResponse)
 def synthesize_speech(req: TTSRequest) -> TTSResponse:
     """Generate playable WAV speech audio for a dialogue line."""
-    RESIDENCY.activate("tts-engine")
-    dur = synthesize_speech_wav(
-        text=req.text,
-        output_path=Path(req.output_path),
-        voice_id=req.voice_id,
-        emotion=req.emotion,
-        language=req.language,
-    )
+    with RESIDENCY.acquire("tts-engine"):
+        dur = synthesize_speech_wav(
+            text=req.text,
+            output_path=Path(req.output_path),
+            voice_id=req.voice_id,
+            emotion=req.emotion,
+            language=req.language,
+        )
     return TTSResponse(audio_path=str(Path(req.output_path).as_posix()), duration_s=dur)
 
 

@@ -1,0 +1,177 @@
+models:
+  wan22-5b-gguf-q4:
+    workflow: workflows/comfyui/wan22_ti2v5b_gguf_api.json
+    family: wan22
+    min_vram_gb: 8
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [480, 832]
+    steps: 20
+    cfg: 5.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UnetLoaderGGUF, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  wan22-5b-fp8:
+    workflow: workflows/comfyui/wan22_ti2v5b_fp8_api.json
+    family: wan22
+    min_vram_gb: 12
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [480, 832]
+      - [544, 960]
+    steps: 20
+    cfg: 5.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  wan22-ti2v-5b:
+    workflow: workflows/comfyui/wan22_ti2v5b_fp8_api.json
+    family: wan22
+    min_vram_gb: 12
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [480, 832]
+      - [544, 960]
+    steps: 20
+    cfg: 5.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  wan22-a14b-fp8:
+    workflow: workflows/comfyui/wan22_i2v_a14b_api.json
+    family: wan22
+    min_vram_gb: 24
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [544, 960]
+      - [720, 1280]
+    steps: 20
+    cfg: 5.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  wan22-i2v-a14b:
+    workflow: workflows/comfyui/wan22_i2v_a14b_api.json
+    family: wan22
+    min_vram_gb: 24
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [544, 960]
+      - [720, 1280]
+    steps: 20
+    cfg: 5.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  wan22-a14b-lightning:
+    workflow: workflows/comfyui/wan22_i2v_a14b_lightning_api.json
+    family: wan22
+    min_vram_gb: 24
+    native_fps: 16
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 81
+    resolution_buckets:
+      - [544, 960]
+      - [720, 1280]
+    steps: 4
+    cfg: 1.0
+    sampler: uni_pc
+    scheduler: simple
+    required_nodes: [UNETLoader, LoraLoaderModelOnly, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+
+  ltx23-fp8:
+    workflow: workflows/comfyui/ltx23_i2v_api.json
+    family: ltx23
+    min_vram_gb: 12
+    native_fps: 24
+    frame_step: 8
+    frame_offset: 1
+    max_frames: 97
+    resolution_buckets:
+      - [544, 960]
+    steps: 25
+    cfg: 3.5
+    sampler: euler
+    scheduler: normal
+    required_nodes: [CheckpointLoaderSimple, CLIPLoader, LTXVImgToVideo, KSampler, SaveWEBM]
+    negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted, text, watermark"
+
+  ltx23:
+    workflow: workflows/comfyui/ltx23_i2v_api.json
+    family: ltx23
+    min_vram_gb: 12
+    native_fps: 24
+    frame_step: 8
+    frame_offset: 1
+    max_frames: 97
+    resolution_buckets:
+      - [544, 960]
+    steps: 25
+    cfg: 3.5
+    sampler: euler
+    scheduler: normal
+    required_nodes: [CheckpointLoaderSimple, CLIPLoader, LTXVImgToVideo, KSampler, SaveWEBM]
+    negative_prompt: "worst quality, inconsistent motion, blurry, jittery, distorted, text, watermark"
+
+  hunyuan15-fp8:
+    workflow: workflows/comfyui/hunyuan15_i2v_api.json
+    family: hunyuan15
+    min_vram_gb: 16
+    native_fps: 24
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 65
+    resolution_buckets:
+      - [544, 960]
+    steps: 20
+    cfg: 6.0
+    sampler: euler
+    scheduler: simple
+    required_nodes: [UNETLoader, DualCLIPLoader, VAELoader, HunyuanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, watermark, low quality, deformed, static"
+    enabled: false
+
+  hunyuan15:
+    workflow: workflows/comfyui/hunyuan15_i2v_api.json
+    family: hunyuan15
+    min_vram_gb: 16
+    native_fps: 24
+    frame_step: 4
+    frame_offset: 1
+    max_frames: 65
+    resolution_buckets:
+      - [544, 960]
+    steps: 20
+    cfg: 6.0
+    sampler: euler
+    scheduler: simple
+    required_nodes: [UNETLoader, DualCLIPLoader, VAELoader, HunyuanImageToVideo, KSampler, SaveWEBM]
+    negative_prompt: "text, watermark, low quality, deformed, static"
+    enabled: false

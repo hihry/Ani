@@ -9,11 +9,17 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _posix_str(val: str | Path) -> str:
     return str(val).replace("\\", "/")
+
+
+def compute_deterministic_seed(config_hash: str, panel_id: str, take: int) -> int:
+    """Derives a reproducible 31-bit positive seed matching Go's ComputeDeterministicSeed."""
+    digest = hashlib.sha256(f"{config_hash}:{panel_id}:{take}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 class BBox(BaseModel):
@@ -102,22 +108,62 @@ class QCScores(BaseModel):
     new_text_count: int = 0
     flicker_score: float = 0.0
     motion_score: float = 0.0
+    warp_error: float = 0.0
+    first_frame_fidelity: float = 0.0
+    style_drift: float = 0.0
+    metrics_version: int = 2
     overall_pass: bool = False
+    reasons: list[str] = Field(default_factory=list)
 
 
 class ClipCandidate(BaseModel):
     """A generated video clip candidate for a panel."""
     model_config = ConfigDict(frozen=False)
     panel_id: str
-    path: str
+    path: str = ""
     take_number: int = 1
-    qc_scores: QCScores
+    seed: int = 0
+    route: str = ""
+    raw_clip_path: str = ""
+    model_id: str = ""
+    positive_prompt: str = ""
+    negative_prompt: str = ""
+    native_width: int = 0
+    native_height: int = 0
+    native_frames: int = 0
+    native_fps: int = 0
+    gen_seconds: float = 0.0
+    peak_vram_gb: float = 0.0
+    cached: bool = False
+    fallback_reason: str = ""
+    render_error: str = ""
+    qc_scores: QCScores = Field(default_factory=QCScores)
     accepted: bool = False
 
-    @field_validator("path", mode="before")
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_phase3_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            d = dict(data)
+            if "clip_path" in d and not d.get("path"):
+                d["path"] = d.pop("clip_path")
+            if "take" in d and "take_number" not in d:
+                d["take_number"] = d.pop("take")
+            return d
+        return data
+
+    @field_validator("path", "raw_clip_path", mode="before")
     @classmethod
     def _normalize_path(cls, v: Any) -> str:
-        return _posix_str(v)
+        return _posix_str(v) if v else ""
+
+    @property
+    def clip_path(self) -> str:
+        return self.path
+
+    @property
+    def take(self) -> int:
+        return self.take_number
 
 
 class AudioTrack(BaseModel):

@@ -1,0 +1,18 @@
+tier: "t2"
+s_per_frame: 0.65
+models:
+  wan22-a14b-lightning:
+    s_per_frame: 0.38
+    peak_vram_gb: 19.6
+  wan22-a14b-fp8:
+    s_per_frame: 0.65
+    peak_vram_gb: 21.4
+  wan22-i2v-a14b:
+    s_per_frame: 0.65
+    peak_vram_gb: 21.4
+  wan22-5b-fp8:
+    s_per_frame: 0.52
+    peak_vram_gb: 11.2
+  ltx23-fp8:
+    s_per_frame: 0.25
+    peak_vram_gb: 9.8
