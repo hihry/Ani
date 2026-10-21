@@ -1,0 +1,24 @@
+qc:
+  identity_threshold: 0.72
+  flicker_threshold: 0.15
+  max_new_text_lines: 0
+  min_motion: 0.01
+  max_motion: 0.98
+  max_warp_error: 0.12
+  min_first_frame_fidelity: 0.75
+  max_style_drift: 0.28
+  require_text_check: true
+  per_route:
+    i2v:
+      min_identity_similarity: 0.72
+      max_flicker_score: 0.15
+      min_motion_score: 0.01
+      max_motion_score: 0.98
+      max_warp_error: 0.12
+      min_first_frame_fidelity: 0.75
+      max_style_drift: 0.28
+      max_retries: 1
+calibration_metrics:
+  cv_agreement: 0.88
+  cv_precision: 0.90
+  cv_recall: 0.86

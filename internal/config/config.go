@@ -10,15 +10,21 @@ import (
 
 // PipelineConfig holds the full pipeline configuration, loaded from YAML.
 type PipelineConfig struct {
-	General       GeneralConfig       `yaml:"general"       json:"general"`
-	Perception    PerceptionConfig    `yaml:"perception"    json:"perception"`
-	Understanding UnderstandingConfig `yaml:"understanding" json:"understanding"`
-	Cleanup       CleanupConfig       `yaml:"cleanup"       json:"cleanup"`
-	Generation    GenerationConfig    `yaml:"generation"    json:"generation"`
-	Audio         AudioConfig         `yaml:"audio"         json:"audio"`
-	Composition   CompositionConfig   `yaml:"composition"   json:"composition"`
-	QC            QCConfig            `yaml:"qc"            json:"qc"`
+	General       GeneralConfig       `yaml:"general"          json:"general"`
+	Perception    PerceptionConfig    `yaml:"perception"       json:"perception"`
+	Understanding UnderstandingConfig `yaml:"understanding"    json:"understanding"`
+	Cleanup       CleanupConfig       `yaml:"cleanup"          json:"cleanup"`
+	Generation    GenerationConfig    `yaml:"generation"       json:"generation"`
+	Audio         AudioConfig         `yaml:"audio"            json:"audio"`
+	Composition   CompositionConfig   `yaml:"composition"      json:"composition"`
+	QC            QCConfig            `yaml:"qc"               json:"qc"`
+	Cost          CostConfig          `yaml:"cost,omitempty"   json:"cost,omitempty"`
 	Worker        WorkerConfig        `yaml:"worker,omitempty" json:"worker,omitempty"`
+}
+
+// CostConfig holds compute budget limits across pipeline stages.
+type CostConfig struct {
+	I2VBudgetS float64 `yaml:"i2v_budget_s,omitempty" json:"i2v_budget_s,omitempty"`
 }
 
 // GeneralConfig holds runtime directory and logging configurations.
@@ -46,10 +52,25 @@ type CleanupConfig struct {
 
 // GenerationConfig holds video generation model priorities and retry limits.
 type GenerationConfig struct {
-	PrimaryModel    string   `yaml:"primary_model"       json:"primary_model"`
-	FallbackModels  []string `yaml:"fallback_models"     json:"fallback_models"`
-	MaxRetries      int      `yaml:"max_retries"         json:"max_retries"`
-	MaxClipDuration float64  `yaml:"max_clip_duration_s" json:"max_clip_duration_s"`
+	PrimaryModel    string   `yaml:"primary_model"               json:"primary_model"`
+	VideoPrimary    string   `yaml:"video_primary,omitempty"     json:"video_primary,omitempty"`
+	VideoFallback   string   `yaml:"video_fallback,omitempty"    json:"video_fallback,omitempty"`
+	FallbackModels  []string `yaml:"fallback_models"             json:"fallback_models"`
+	MaxRetries      int      `yaml:"max_retries"                 json:"max_retries"`
+	MaxClipDuration float64  `yaml:"max_clip_duration_s"         json:"max_clip_duration_s"`
+	MaxI2VClipS     float64  `yaml:"max_i2v_clip_s,omitempty"    json:"max_i2v_clip_s,omitempty"`
+	MaxI2VPanels    int      `yaml:"max_i2v_panels,omitempty"    json:"max_i2v_panels,omitempty"`
+	MaxI2VTakes     int      `yaml:"max_i2v_takes,omitempty"     json:"max_i2v_takes,omitempty"`
+	CalibrationFile string   `yaml:"calibration_file,omitempty"  json:"calibration_file,omitempty"`
+	ComfyURL        string   `yaml:"comfy_url,omitempty"         json:"comfy_url,omitempty"`
+}
+
+// EffectivePrimaryModel returns VideoPrimary if set, falling back to PrimaryModel.
+func (g GenerationConfig) EffectivePrimaryModel() string {
+	if g.VideoPrimary != "" {
+		return g.VideoPrimary
+	}
+	return g.PrimaryModel
 }
 
 // AudioConfig holds speech synthesis backend settings.
@@ -66,13 +87,30 @@ type CompositionConfig struct {
 	TransitionType string `yaml:"transition_type" json:"transition_type"`
 }
 
+// QCRouteThresholds holds route-specific QC thresholds.
+type QCRouteThresholds struct {
+	MinIdentitySimilarity float64 `yaml:"min_identity_similarity" json:"min_identity_similarity"`
+	MaxFlickerScore       float64 `yaml:"max_flicker_score"       json:"max_flicker_score"`
+	MinMotionScore        float64 `yaml:"min_motion_score"        json:"min_motion_score"`
+	MaxMotionScore        float64 `yaml:"max_motion_score"        json:"max_motion_score"`
+	MaxWarpError          float64 `yaml:"max_warp_error"          json:"max_warp_error"`
+	MinFirstFrameFidelity float64 `yaml:"min_first_frame_fidelity" json:"min_first_frame_fidelity"`
+	MaxStyleDrift         float64 `yaml:"max_style_drift"         json:"max_style_drift"`
+	MaxRetries            int     `yaml:"max_retries"             json:"max_retries"`
+}
+
 // QCConfig holds validation and quality assurance thresholds.
 type QCConfig struct {
-	IdentityThreshold float64 `yaml:"identity_threshold" json:"identity_threshold"`
-	FlickerThreshold  float64 `yaml:"flicker_threshold"  json:"flicker_threshold"`
-	MaxNewTextLines   int     `yaml:"max_new_text_lines" json:"max_new_text_lines"`
-	MinMotion         float64 `yaml:"min_motion,omitempty" json:"min_motion,omitempty"`
-	MaxMotion         float64 `yaml:"max_motion,omitempty" json:"max_motion,omitempty"`
+	IdentityThreshold     float64                      `yaml:"identity_threshold"               json:"identity_threshold"`
+	FlickerThreshold      float64                      `yaml:"flicker_threshold"                json:"flicker_threshold"`
+	MaxNewTextLines       int                          `yaml:"max_new_text_lines"               json:"max_new_text_lines"`
+	MinMotion             float64                      `yaml:"min_motion,omitempty"             json:"min_motion,omitempty"`
+	MaxMotion             float64                      `yaml:"max_motion,omitempty"             json:"max_motion,omitempty"`
+	MaxWarpError          float64                      `yaml:"max_warp_error,omitempty"         json:"max_warp_error,omitempty"`
+	MinFirstFrameFidelity float64                      `yaml:"min_first_frame_fidelity,omitempty" json:"min_first_frame_fidelity,omitempty"`
+	MaxStyleDrift         float64                      `yaml:"max_style_drift,omitempty"        json:"max_style_drift,omitempty"`
+	RequireTextCheck      bool                         `yaml:"require_text_check,omitempty"     json:"require_text_check,omitempty"`
+	PerRoute              map[string]QCRouteThresholds `yaml:"per_route,omitempty"              json:"per_route,omitempty"`
 }
 
 // WorkerConfig holds Python AI worker daemon host and port.
@@ -131,8 +169,14 @@ func (c *PipelineConfig) Validate() error {
 	if c.Cleanup.Inpainter == "" {
 		return fmt.Errorf("cleanup inpainter must not be empty")
 	}
-	if c.Generation.PrimaryModel == "" {
+	if c.Generation.EffectivePrimaryModel() == "" {
 		return fmt.Errorf("generation primary model must not be empty")
+	}
+	if c.Generation.PrimaryModel == "" {
+		c.Generation.PrimaryModel = c.Generation.VideoPrimary
+	}
+	if c.Generation.MaxClipDuration <= 0 && c.Generation.MaxI2VClipS > 0 {
+		c.Generation.MaxClipDuration = c.Generation.MaxI2VClipS
 	}
 	if c.Generation.MaxClipDuration <= 0 {
 		return fmt.Errorf("generation max clip duration must be positive, got %f", c.Generation.MaxClipDuration)

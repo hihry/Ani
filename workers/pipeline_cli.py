@@ -96,11 +96,79 @@ def render_single_panel_clip(
     duration_s: float = 3.0,
     fps: int = 24,
     target_res: Tuple[int, int] = (720, 1280),
+    panel_id: str = "",
+    model_id: str = "",
+    seed: int = 42,
+    action_prompt: str = "",
+    motion_type_override: str = "",
+    emotion: str = "neutral",
+    comfy_url: str = "",
+    cancel_event: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Renders a single panel clip using its assigned route and returns clip path + QC metrics."""
-    motion_type, _, _ = CAMERA_MOTION_TAXONOMY.get(
+    image_path = Path(image_path)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pid = panel_id or image_path.stem
+
+    default_motion, _, _ = CAMERA_MOTION_TAXONOMY.get(
         shot_type, CAMERA_MOTION_TAXONOMY["medium"]
     )
+    motion_type = motion_type_override if motion_type_override in (
+        "zoom_in", "zoom_out", "pan_up", "pan_down", "pan_left", "pan_right"
+    ) else default_motion
+
+    resolved_comfy = (comfy_url or os.environ.get("M2A_COMFY_URL", "")).strip()
+    if route == "i2v" and resolved_comfy:
+        from workers.video.comfy_client import ComfyClient
+        from workers.video.provider import ComfyVideoProvider, load_model_specs
+
+        specs = load_model_specs()
+        eff_model = model_id if model_id in specs else "wan22-ti2v-5b"
+        provider = ComfyVideoProvider(
+            spec=specs[eff_model],
+            client=ComfyClient(base_url=resolved_comfy),
+        )
+        gen_res = provider.generate(
+            panel={
+                "panel_id": pid,
+                "action_prompt": action_prompt,
+                "motion_type": motion_type,
+                "emotion": emotion,
+            },
+            clean_plate=image_path,
+            duration_s=duration_s,
+            seed=seed,
+            out_dir=output_path.parent,
+            target_res=target_res,
+            fps=fps,
+            cancel_event=cancel_event,
+        )
+        if gen_res.clip_path != output_path:
+            import shutil
+            shutil.copy2(gen_res.clip_path, output_path)
+        frames = decode_video_frames(output_path, target_res=target_res)
+        qc_scores = compute_clip_qc_metrics(image_path, frames, route="i2v")
+        return {
+            "clip_path": str(output_path.as_posix()),
+            "raw_clip_path": str(gen_res.raw_clip_path.as_posix()),
+            "frames_count": len(frames),
+            "duration_s": len(frames) / float(max(1, fps)),
+            "route_used": "i2v",
+            "model_id": gen_res.model_id,
+            "seed": gen_res.seed,
+            "positive_prompt": gen_res.positive_prompt,
+            "negative_prompt": gen_res.negative_prompt,
+            "native_width": gen_res.native_width,
+            "native_height": gen_res.native_height,
+            "native_frames": gen_res.native_frames,
+            "native_fps": gen_res.native_fps,
+            "gen_seconds": gen_res.gen_seconds,
+            "peak_vram_gb": gen_res.peak_vram_gb,
+            "cached": gen_res.cached,
+            "qc_scores": qc_scores,
+        }
+
     actual_route = "parallax" if route == "i2v" else route
     if actual_route == "parallax":
         frames = generate_parallax_frames(
@@ -119,38 +187,51 @@ def render_single_panel_clip(
             motion_type=motion_type,
         )
 
-    output_path = Path(output_path)
     encode_mjpeg_avi(frames, output_path, fps=fps)
-    qc_scores = compute_clip_qc_metrics(image_path, frames)
+    qc_scores = compute_clip_qc_metrics(image_path, frames, route=actual_route)
     return {
         "clip_path": str(output_path.as_posix()),
         "frames_count": len(frames),
         "duration_s": len(frames) / float(max(1, fps)),
         "route_used": actual_route,
+        "model_id": model_id or actual_route,
+        "seed": int(seed),
         "qc_scores": qc_scores,
     }
 
 
-def _find_accepted_clip_path(run_dir: Path, clip_candidates: Dict[str, Any], panel_id: str) -> Optional[Path]:
-    """Returns the accepted clip path for panel_id if present on disk."""
+def _find_accepted_clip_candidate(
+    run_dir: Path,
+    clip_candidates: Dict[str, Any],
+    panel_id: str,
+) -> Tuple[Optional[Path], Optional[Dict[str, Any]]]:
+    """Returns `(clip_path, candidate_dict)` for panel_id if present on disk."""
     cands = clip_candidates.get(panel_id, [])
     if not isinstance(cands, list) or not cands:
-        return None
+        return None, None
     accepted = [c for c in cands if isinstance(c, dict) and c.get("accepted")]
     chosen = accepted[-1] if accepted else cands[-1]
-    raw_path = chosen.get("path", "") if isinstance(chosen, dict) else ""
+    if not isinstance(chosen, dict):
+        return None, None
+    raw_path = chosen.get("path") or chosen.get("clip_path") or ""
     if not raw_path:
-        return None
+        return None, chosen
     p = Path(raw_path)
     if p.is_file():
-        return p
+        return p, chosen
     rel = run_dir / Path(raw_path).name
     if rel.is_file():
-        return rel
+        return rel, chosen
     in_clips = run_dir / "clips" / Path(raw_path).name
     if in_clips.is_file():
-        return in_clips
-    return None
+        return in_clips, chosen
+    return None, chosen
+
+
+def _find_accepted_clip_path(run_dir: Path, clip_candidates: Dict[str, Any], panel_id: str) -> Optional[Path]:
+    """Returns the accepted clip path for panel_id if present on disk."""
+    clip_p, _ = _find_accepted_clip_candidate(run_dir, clip_candidates, panel_id)
+    return clip_p
 
 
 def assemble_from_run_state(
@@ -204,11 +285,21 @@ def assemble_from_run_state(
         frames: List[Image.Image] = []
 
         # 1. Reuse QC-accepted clip from GENERATE/QC when frame count matches (P1-01 / O1)
-        accepted_clip = _find_accepted_clip_path(run_dir, clip_candidates, pid)
+        #    For accepted I2V clips (M0-2 / E7), a frame count mismatch (> 2 frames) is a hard error
+        #    and MUST NOT silently re-render as parallax.
+        accepted_clip, chosen_cand = _find_accepted_clip_candidate(run_dir, clip_candidates, pid)
+        cand_route = str((chosen_cand or {}).get("route") or route).lower()
         if accepted_clip is not None:
             decoded = decode_video_frames(accepted_clip, target_res=target_res)
             if decoded and abs(len(decoded) - expected_frames) <= 2:
                 frames = decoded
+            elif cand_route == "i2v" and (chosen_cand or {}).get("accepted"):
+                raise ValueError(
+                    f"I2V clip frame mismatch for {pid}: decoded {len(decoded)} frames, "
+                    f"expected {expected_frames} (E7)"
+                )
+        elif cand_route == "i2v" and (chosen_cand or {}).get("accepted"):
+            raise ValueError(f"Accepted I2V clip file missing for {pid}: {chosen_cand} (E7)")
 
         # 2. Fallback to rendering only if accepted clip is missing or duration changed after CP2
         if not frames:
@@ -400,6 +491,10 @@ def cmd_render(args: argparse.Namespace) -> None:
         duration_s=args.duration,
         fps=args.fps,
         target_res=(args.width, args.height),
+        model_id=getattr(args, "model_id", "") or "",
+        seed=int(getattr(args, "seed", 42) or 42),
+        action_prompt=getattr(args, "prompt", "") or "",
+        comfy_url=getattr(args, "comfy_url", "") or "",
     )
     print(json.dumps(res))
 
@@ -503,6 +598,10 @@ def main() -> None:
     p_render.add_argument("--fps", type=int, default=24, help="Frames per second")
     p_render.add_argument("--width", type=int, default=720, help="Target width")
     p_render.add_argument("--height", type=int, default=1280, help="Target height")
+    p_render.add_argument("--model-id", default="", help="Video model ID for I2V")
+    p_render.add_argument("--seed", type=int, default=42, help="Deterministic seed")
+    p_render.add_argument("--prompt", default="", help="Positive action prompt")
+    p_render.add_argument("--comfy-url", default="", help="ComfyUI HTTP URL")
 
     p_tts = subparsers.add_parser("tts")
     p_tts.add_argument("--text", required=True, help="Dialogue text")

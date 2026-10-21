@@ -1,0 +1,113 @@
+comfyui_commit: "7a28332047b6af638dc6c7f72ef3481a718769fd"
+custom_nodes:
+  - name: "ComfyUI-GGUF"
+    repo: "https://github.com/city96/ComfyUI-GGUF.git"
+    commit: "HEAD"
+  - name: "ComfyUI-LTXVideo"
+    repo: "https://github.com/Lightricks/ComfyUI-LTXVideo.git"
+    commit: "HEAD"
+  - name: "ComfyUI-Frame-Interpolation"
+    repo: "https://github.com/Fannovel16/ComfyUI-Frame-Interpolation.git"
+    commit: "HEAD"
+
+models:
+  wan22-5b-gguf-q4:
+    tier: "t1s"
+    min_vram_gb: 8
+    workflow: "wan22_ti2v5b_gguf_api.json"
+    files:
+      - repo: "QuantStack/Wan2.2-TI2V-5B-GGUF"
+        file: "Wan2.2-TI2V-5B-Q4_K_M.gguf"
+        revision: "main"
+        target_dir: "unet"
+        sha256: "95b19697b7f98e65b0a543640e9ca7b4dfec32e2a6e3731e8e10708be52655e2"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+        revision: "main"
+        target_dir: "text_encoders"
+        sha256: "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/vae/wan2.2_vae.safetensors"
+        revision: "main"
+        target_dir: "vae"
+        sha256: "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156"
+
+  wan22-5b-fp8:
+    tier: "t1"
+    min_vram_gb: 12
+    workflow: "wan22_ti2v5b_fp8_api.json"
+    files:
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+        revision: "main"
+        target_dir: "diffusion_models"
+        sha256: "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+        revision: "main"
+        target_dir: "text_encoders"
+        sha256: "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/vae/wan2.2_vae.safetensors"
+        revision: "main"
+        target_dir: "vae"
+        sha256: "e40321bd36b9709991dae2530eb4ac303dd168276980d3e9bc4b6e2b75fed156"
+
+  wan22-a14b-fp8:
+    tier: "t2"
+    min_vram_gb: 24
+    workflow: "wan22_i2v_a14b_api.json"
+    files:
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/diffusion_models/wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors"
+        revision: "main"
+        target_dir: "diffusion_models"
+        sha256: "6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/diffusion_models/wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors"
+        revision: "main"
+        target_dir: "diffusion_models"
+        sha256: "5471a457b6ac404202a5fbe6c11595a3d5641fc766b00f38763f72303fffc21e"
+      - repo: "Comfy-Org/Wan_2.2_ComfyUI_Repackaged"
+        file: "split_files/vae/wan_2.1_vae.safetensors"
+        revision: "main"
+        target_dir: "vae"
+        sha256: "2fc39d31359a4b0a64f55876d8ff7fa8d780956ae2cb13463b0223e15148976b"
+
+  wan22-a14b-lightning:
+    tier: "t2"
+    min_vram_gb: 24
+    workflow: "wan22_i2v_a14b_lightning_api.json"
+    files:
+      - repo: "lightx2v/Wan2.2-Lightning"
+        file: "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/high_noise_model.safetensors"
+        revision: "main"
+        target_dir: "loras"
+        sha256: "d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e"
+      - repo: "lightx2v/Wan2.2-Lightning"
+        file: "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors"
+        revision: "main"
+        target_dir: "loras"
+        sha256: "024f21de095bc8fad9809ded3e9e49a2e170dcf27075da8145ba7d60d8aab7f9"
+
+  ltx23-fp8:
+    tier: "t1"
+    min_vram_gb: 12
+    workflow: "ltx23_i2v_api.json"
+    files:
+      - repo: "Lightricks/LTX-Video"
+        file: "ltx-video-2b-v0.9.5.safetensors"
+        revision: "main"
+        target_dir: "checkpoints"
+        sha256: "720d15c9f19f7d0f6b2a92bbbc34410e2cfb2f6856a100b38f734fbf973d4adf"
+
+  hunyuan15-fp8:
+    tier: "t1"
+    min_vram_gb: 16
+    workflow: "hunyuan15_i2v_api.json"
+    files:
+      - repo: "Comfy-Org/HunyuanVideo_repackaged"
+        file: "split_files/diffusion_models/hunyuan_video_image_to_video_720p_bf16.safetensors"
+        revision: "main"
+        target_dir: "diffusion_models"
+        sha256: "8b9c3c7bac5775bce0d3eb0dae0fcc37fb472456f1bb4e7e6c4fc045095e93b1"

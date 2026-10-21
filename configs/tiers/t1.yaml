@@ -1,9 +1,55 @@
-# T1: 12-16 GB GPU (e.g., RTX 4070, 3080)
+# T1: 12-16 GB GPU (e.g., RTX 4070, 3080, 4060 Ti 16GB)
 generation:
   primary_model: "wan22-ti2v-5b"
+  video_primary: "wan22-ti2v-5b"
+  video_fallback: "ltx23-fp8"
   fallback_models:
+    - "ltx23-fp8"
+    - "parallax"
     - "kenburns"
   max_retries: 2
+  max_clip_duration_s: 4.0
+  max_i2v_clip_s: 4.0
+  max_i2v_panels: 3
+  max_i2v_takes: 2
+  calibration_file: "configs/calibration/t1.yaml"
 
 understanding:
   vlm: "qwen3-vl-8b-4bit"
+
+cost:
+  i2v_budget_s: 180.0
+
+qc:
+  identity_threshold: 0.85
+  flicker_threshold: 0.15
+  max_new_text_lines: 0
+  require_text_check: true
+  per_route:
+    i2v:
+      min_identity_similarity: 0.75
+      max_flicker_score: 0.14
+      min_motion_score: 0.012
+      max_motion_score: 0.98
+      max_warp_error: 0.11
+      min_first_frame_fidelity: 0.78
+      max_style_drift: 0.25
+      max_retries: 2
+    parallax:
+      min_identity_similarity: 0.85
+      max_flicker_score: 0.15
+      min_motion_score: 0.01
+      max_motion_score: 0.98
+      max_warp_error: 0.10
+      min_first_frame_fidelity: 0.82
+      max_style_drift: 0.20
+      max_retries: 1
+    kenburns:
+      min_identity_similarity: 0.85
+      max_flicker_score: 0.15
+      min_motion_score: 0.01
+      max_motion_score: 0.98
+      max_warp_error: 0.10
+      min_first_frame_fidelity: 0.85
+      max_style_drift: 0.18
+      max_retries: 0

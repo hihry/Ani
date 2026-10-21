@@ -94,6 +94,15 @@ python -m pytest tests/test_pipeline.py -v
 
 # Phase 1 Segmentation F1 & IoU benchmark
 python workers/eval_segmentation.py
+
+# Phase 2 Understanding & OCR benchmark
+python workers/eval_understanding.py
+
+# Phase 3 ComfyUI setup, Video Bake-off & QC Calibration
+./scripts/comfyui/setup_local.sh
+python scripts/comfyui/download_models.py --tier t1 --dry-run
+python -m m2a.eval.bakeoff --config configs/bakeoff/phase3.yaml --out runs/bakeoff_phase3
+python -m m2a.eval.calibrate_qc --bakeoff runs/bakeoff_phase3/records.jsonl --out configs/qc/calibrated_t1.yaml
 ```
 
 ## Project Structure
@@ -130,8 +139,9 @@ Ani/
 | Tier | Hardware Target | Video Generation Model | Vision-Language Model (VLM) | TTS Audio Engine |
 | :--- | :--- | :--- | :--- | :--- |
 | **T0** | CPU Only (No GPU) | Aspect-Safe Ken Burns & 2.5D Parallax | Qwen3-VL-2B / CV Analyzer | Kokoro / Harmonic WAV Synth |
-| **T1** | 12–16 GB VRAM (RTX 3080/4070) | Wan2.2-Ti2V-5B (fallback: Parallax/KB) | Qwen3-VL-8B (4-bit quantized) | MeloTTS (fallback: Kokoro) |
-| **T2** | 24–48 GB VRAM (RTX 4090/A5000/Cloud) | Wan2.2-I2V-A14B (fallback: Ti2V-5B, Hunyuan1.5) | Qwen3-VL-8B (FP16) | MeloTTS / Chatterbox |
+| **T1S** | 8 GB VRAM (RTX 3070/4060) | Wan2.2-Ti2V-5B GGUF Q4_K_M (`wan22-5b-gguf-q4`) | Qwen3-VL-8B (4-bit quantized) | MeloTTS / Kokoro |
+| **T1** | 12–16 GB VRAM (RTX 3080/4070) | Wan2.2-Ti2V-5B FP8 (`wan22-ti2v-5b`, fallback: `ltx23-fp8`) | Qwen3-VL-8B (4-bit quantized) | MeloTTS (fallback: Kokoro) |
+| **T2** | 24–48 GB VRAM (RTX 4090/A5000/Cloud) | Wan2.2-I2V-A14B FP8 / LightX2V 4-Step LoRA | Qwen3-VL-8B (FP16) | MeloTTS / Chatterbox |
 
 ## License
 

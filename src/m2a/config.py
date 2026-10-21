@@ -26,11 +26,22 @@ class CleanupConfig(BaseModel):
     inpainter: str = "lama"
 
 
+class CostConfig(BaseModel):
+    i2v_budget_s: float = 0.0
+
+
 class GenerationConfig(BaseModel):
     primary_model: str = "wan22-ti2v-5b"
+    video_primary: str | None = None
+    video_fallback: str | None = None
     fallback_models: list[str] = Field(default_factory=lambda: ["hunyuan15", "ltx23"])
     max_retries: int = 2
     max_clip_duration_s: float = 5.0
+    max_i2v_clip_s: float = 5.0
+    max_i2v_panels: int = 4
+    max_i2v_takes: int = 2
+    calibration_file: str = ""
+    comfy_url: str = "http://127.0.0.1:8188"
 
 
 class AudioConfig(BaseModel):
@@ -45,12 +56,28 @@ class CompositionConfig(BaseModel):
     transition_type: str = "crossfade"
 
 
+class QCRouteThresholds(BaseModel):
+    min_identity_similarity: float = 0.85
+    max_flicker_score: float = 0.15
+    min_motion_score: float = 0.01
+    max_motion_score: float = 0.98
+    max_warp_error: float = 0.12
+    min_first_frame_fidelity: float = 0.75
+    max_style_drift: float = 0.28
+    max_retries: int = 2
+
+
 class QCConfig(BaseModel):
     identity_threshold: float = 0.85
     flicker_threshold: float = 0.15
     max_new_text_lines: int = 0
     min_motion: float = 0.01
     max_motion: float = 0.98
+    max_warp_error: float = 0.12
+    min_first_frame_fidelity: float = 0.75
+    max_style_drift: float = 0.28
+    require_text_check: bool = True
+    per_route: dict[str, QCRouteThresholds] = Field(default_factory=dict)
 
 
 class WorkerConfig(BaseModel):
@@ -69,6 +96,7 @@ class PipelineConfig(BaseModel):
     audio: AudioConfig = Field(default_factory=AudioConfig)
     composition: CompositionConfig = Field(default_factory=CompositionConfig)
     qc: QCConfig = Field(default_factory=QCConfig)
+    cost: CostConfig = Field(default_factory=CostConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
 
     @property

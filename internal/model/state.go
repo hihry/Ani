@@ -2,6 +2,7 @@ package model
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,20 +36,46 @@ const (
 
 // QCScores holds quality metrics for a generated clip.
 type QCScores struct {
-	IdentitySimilarity float64 `json:"identity_similarity"`
-	NewTextCount       int     `json:"new_text_count"`
-	FlickerScore       float64 `json:"flicker_score"`
-	MotionScore        float64 `json:"motion_score"`
-	OverallPass        bool    `json:"overall_pass"`
+	IdentitySimilarity float64  `json:"identity_similarity"`
+	NewTextCount       int      `json:"new_text_count"`
+	FlickerScore       float64  `json:"flicker_score"`
+	MotionScore        float64  `json:"motion_score"`
+	WarpError          float64  `json:"warp_error,omitempty"`
+	FirstFrameFidelity float64  `json:"first_frame_fidelity,omitempty"`
+	StyleDrift         float64  `json:"style_drift,omitempty"`
+	MetricsVersion     int      `json:"metrics_version,omitempty"`
+	OverallPass        bool     `json:"overall_pass"`
+	Reasons            []string `json:"reasons,omitempty"`
 }
 
 // ClipCandidate represents one attempt at generating a video clip for a panel.
 type ClipCandidate struct {
-	PanelID    string   `json:"panel_id"`
-	Path       string   `json:"path"`
-	TakeNumber int      `json:"take_number"`
-	QC         QCScores `json:"qc_scores"`
-	Accepted   bool     `json:"accepted"`
+	PanelID        string         `json:"panel_id"`
+	Path           string         `json:"path"`
+	TakeNumber     int            `json:"take_number"`
+	Seed           int            `json:"seed,omitempty"`
+	Route          AnimationRoute `json:"route,omitempty"`
+	RawClipPath    string         `json:"raw_clip_path,omitempty"`
+	ModelID        string         `json:"model_id,omitempty"`
+	PositivePrompt string         `json:"positive_prompt,omitempty"`
+	NegativePrompt string         `json:"negative_prompt,omitempty"`
+	NativeWidth    int            `json:"native_width,omitempty"`
+	NativeHeight   int            `json:"native_height,omitempty"`
+	NativeFrames   int            `json:"native_frames,omitempty"`
+	NativeFPS      int            `json:"native_fps,omitempty"`
+	GenSeconds     float64        `json:"gen_seconds,omitempty"`
+	PeakVRAMGB     float64        `json:"peak_vram_gb,omitempty"`
+	Cached         bool           `json:"cached,omitempty"`
+	FallbackReason string         `json:"fallback_reason,omitempty"`
+	RenderError    string         `json:"render_error,omitempty"`
+	QC             QCScores       `json:"qc_scores"`
+	Accepted       bool           `json:"accepted"`
+}
+
+// ComputeDeterministicSeed derives a reproducible 31-bit positive seed from (configHash, panelID, take).
+func ComputeDeterministicSeed(configHash, panelID string, take int) int {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", configHash, panelID, take)))
+	return int(binary.BigEndian.Uint32(sum[:4]) & 0x7fffffff)
 }
 
 // AudioTrack represents a generated TTS audio file.
@@ -116,6 +143,9 @@ func (s *RunState) NormalizePaths() {
 	for k, list := range s.ClipCandidates {
 		for i := range list {
 			list[i].Path = normalizeSlash(list[i].Path)
+			if list[i].RawClipPath != "" {
+				list[i].RawClipPath = normalizeSlash(list[i].RawClipPath)
+			}
 		}
 		s.ClipCandidates[k] = list
 	}

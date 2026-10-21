@@ -32,6 +32,11 @@ try:
 except ImportError:
     from understanding import count_residual_text_bubbles, detect_speech_bubbles_and_text
 
+try:
+    from workers.qc_metrics import compute_clip_qc_metrics
+except ImportError:
+    from qc_metrics import compute_clip_qc_metrics
+
 logger = logging.getLogger("m2a.assembler")
 
 _FONT_CANDIDATES = [
@@ -75,86 +80,6 @@ def crossfade_transition(
         blended.append(blended_frame)
 
     return lead_a + blended + tail_b
-
-
-def compute_clip_qc_metrics(
-    source_image_path: Path,
-    frames: List[Image.Image],
-) -> Dict[str, Any]:
-    """Computes automatic QC metrics (Identity, Flicker, Motion, Text Leakage) on rendered frames."""
-    if not frames:
-        return {
-            "identity_similarity": 0.0,
-            "new_text_count": 0,
-            "flicker_score": 1.0,
-            "motion_score": 0.0,
-            "overall_pass": False,
-        }
-
-    src_img = Image.open(source_image_path).convert("RGB")
-    first_frame = frames[0].convert("RGB")
-    last_frame = frames[-1].convert("RGB")
-
-    # 1. Identity / Palette Similarity (16-bin per channel color histogram cosine similarity)
-    def _hist_vec(im: Image.Image) -> np.ndarray:
-        arr_rgb = np.asarray(im.resize((128, 128), Image.Resampling.BILINEAR), dtype=np.float32)
-        bins = [np.histogram(arr_rgb[:, :, c], bins=16, range=(0.0, 256.0))[0] for c in range(3)]
-        h = np.concatenate(bins).astype(np.float32)
-        norm = float(np.linalg.norm(h))
-        return h / max(1e-6, norm)
-
-    v_src = _hist_vec(src_img)
-    v_first = _hist_vec(first_frame)
-    v_last = _hist_vec(last_frame)
-    sim_src = 0.5 * (float(np.dot(v_src, v_first)) + float(np.dot(v_src, v_last)))
-    src_ref = src_img
-    if src_img.size != first_frame.size:
-        try:
-            from workers.render_kenburns import prepare_cinematic_canvas
-        except ImportError:
-            from render_kenburns import prepare_cinematic_canvas
-        src_ref = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.0)
-        if src_img.width * first_frame.height > first_frame.width * src_img.height:
-            v_src_canvas = _hist_vec(src_ref)
-            sim_canvas = 0.5 * (float(np.dot(v_src_canvas, v_first)) + float(np.dot(v_src_canvas, v_last)))
-            sim_src = max(sim_src, sim_canvas)
-    sim_temporal = float(np.dot(v_first, v_last))
-    identity_similarity = round(max(0.0, min(1.0, 0.5 * sim_src + 0.5 * sim_temporal)), 4)
-
-    # 2. Temporal Stability (Flicker Score) & Motion Sanity (without artificial floor)
-    if len(frames) > 1:
-        step = max(1, len(frames) // 16)
-        sampled = [
-            np.asarray(f.resize((180, 320), Image.Resampling.BILINEAR).convert("L"), dtype=np.float32) / 255.0
-            for f in frames[::step]
-        ]
-        deltas = [float(np.mean(np.abs(sampled[i + 1] - sampled[i]))) for i in range(len(sampled) - 1)]
-        flicker_score = round(float(np.std(deltas)), 4)
-        mean_delta = float(np.mean(deltas))
-        motion_score = round(float(np.clip(mean_delta * 18.0, 0.0, 1.0)), 4)
-    else:
-        flicker_score = 0.0
-        motion_score = 0.0
-
-    # 3. Text Leakage QC (Phase 2 -> Phase 5 connection):
-    # Count any newly introduced / uncleaned text bubbles in rendered frames relative to the input plate
-    src_bubbles = min(count_residual_text_bubbles(src_img), count_residual_text_bubbles(src_ref))
-    frame_bubbles = max(count_residual_text_bubbles(first_frame), count_residual_text_bubbles(last_frame))
-    new_text_count = max(0, int(frame_bubbles - src_bubbles))
-
-    overall_pass = (
-        identity_similarity >= 0.85
-        and flicker_score <= 0.15
-        and 0.01 <= motion_score <= 0.98
-        and new_text_count == 0
-    )
-    return {
-        "identity_similarity": identity_similarity,
-        "new_text_count": new_text_count,
-        "flicker_score": flicker_score,
-        "motion_score": motion_score,
-        "overall_pass": bool(overall_pass),
-    }
 
 
 def inpaint_panel_bubbles(

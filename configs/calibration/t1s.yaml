@@ -1,0 +1,6 @@
+tier: "t1s"
+s_per_frame: 1.45
+models:
+  wan22-5b-gguf-q4:
+    s_per_frame: 1.45
+    peak_vram_gb: 7.4

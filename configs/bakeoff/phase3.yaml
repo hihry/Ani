@@ -1,0 +1,76 @@
+bakeoff_id: "phase3_v1"
+fps: 24
+resolution: [540, 960]
+seeds: [42, 1337, 2026]
+
+panels:
+  - panel_id: "panel_001_closeup"
+    category: "character_closeup"
+    shot: "close_up"
+    duration_s: 2.5
+    action_prompt: "protagonist eyes glowing blue, hair swaying gently in dark wind"
+    motion_type: "zoom_in"
+    emotion: "intense"
+
+  - panel_id: "panel_002_action"
+    category: "action_slash"
+    shot: "splash"
+    duration_s: 3.0
+    action_prompt: "shadow blade slash with cyan energy sparks and dynamic motion blur"
+    motion_type: "zoom_out"
+    emotion: "fierce"
+
+  - panel_id: "panel_003_dialogue"
+    category: "dialogue_two_shot"
+    shot: "medium"
+    duration_s: 3.5
+    action_prompt: "two hunters facing each other, subtle breathing and cloak movement"
+    motion_type: "pan_right"
+    emotion: "calm"
+
+  - panel_id: "panel_004_wide"
+    category: "wide_establishing"
+    shot: "wide"
+    duration_s: 3.0
+    action_prompt: "ruined dungeon cathedral with floating dust motes and torch flicker"
+    motion_type: "pan_down"
+    emotion: "mysterious"
+
+  - panel_id: "panel_005_sfx"
+    category: "sfx_heavy_impact"
+    shot: "splash"
+    duration_s: 2.5
+    action_prompt: "ground shockwave crack expanding beneath boots, debris rising"
+    motion_type: "zoom_in"
+    emotion: "urgent"
+
+  - panel_id: "panel_006_vertical"
+    category: "tall_vertical_scroll"
+    shot: "wide"
+    duration_s: 4.0
+    action_prompt: "vertical descent down abyssal tower staircase, swirling mist"
+    motion_type: "pan_down"
+    emotion: "tense"
+
+models:
+  - id: "wan22-5b-gguf-q4"
+    tier: "t1s"
+    route: "i2v"
+  - id: "wan22-5b-fp8"
+    tier: "t1"
+    route: "i2v"
+  - id: "wan22-a14b-fp8"
+    tier: "t2"
+    route: "i2v"
+  - id: "wan22-a14b-lightning"
+    tier: "t2"
+    route: "i2v"
+  - id: "ltx23-fp8"
+    tier: "t1"
+    route: "i2v"
+  - id: "parallax"
+    tier: "cpu"
+    route: "parallax"
+  - id: "kenburns"
+    tier: "cpu"
+    route: "kenburns"

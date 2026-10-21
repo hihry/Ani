@@ -232,3 +232,66 @@ func TestRunStateSave_RejectsInvalidDurationAndLang(t *testing.T) {
 		t.Fatal("expected Save to reject unsupported language 'zh', got nil")
 	}
 }
+
+func TestClipCandidateRoundTripPhase3(t *testing.T) {
+	tmpDir := t.TempDir()
+	state := NewRunState([]string{"p1.png"}, "ko", "t1")
+	p := NewPanelJSON("panel_001", BBox{X: 0, Y: 0, W: 540, H: 960})
+	p.Route = RouteI2V
+	state.Panels = []PanelJSON{p}
+
+	seed := ComputeDeterministicSeed("abc123hash", "panel_001", 1)
+	if seed <= 0 {
+		t.Fatalf("expected positive deterministic seed, got %d", seed)
+	}
+	seedSame := ComputeDeterministicSeed("abc123hash", "panel_001", 1)
+	seedTake2 := ComputeDeterministicSeed("abc123hash", "panel_001", 2)
+	if seed != seedSame || seed == seedTake2 {
+		t.Fatalf("expected deterministic seed parity (%d == %d) and variation across takes (%d)", seed, seedSame, seedTake2)
+	}
+
+	state.ClipCandidates["panel_001"] = []ClipCandidate{{
+		PanelID:        "panel_001",
+		Path:           "runs/r1/clips/panel_001_clip_01.avi",
+		RawClipPath:    "runs/r1/clips/_raw/raw_01.avi",
+		TakeNumber:     1,
+		Seed:           seed,
+		Route:          RouteI2V,
+		ModelID:        "wan22-ti2v-5b",
+		PositivePrompt: "subtle motion, 2D anime style",
+		NegativePrompt: "text, watermark, flicker",
+		NativeWidth:    544,
+		NativeHeight:   960,
+		NativeFrames:   49,
+		NativeFPS:      16,
+		GenSeconds:     28.4,
+		PeakVRAMGB:     11.2,
+		Cached:         false,
+		FallbackReason: "qc_reseed",
+		QC: QCScores{
+			IdentitySimilarity: 0.89,
+			NewTextCount:       0,
+			FlickerScore:       0.04,
+			MotionScore:        0.22,
+			WarpError:          0.03,
+			FirstFrameFidelity: 0.91,
+			StyleDrift:         0.08,
+			MetricsVersion:     2,
+			OverallPass:        true,
+			Reasons:            []string{},
+		},
+		Accepted: true,
+	}}
+
+	if err := state.Save(tmpDir); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	loaded, err := LoadRunState(tmpDir)
+	if err != nil {
+		t.Fatalf("LoadRunState failed: %v", err)
+	}
+	got := loaded.ClipCandidates["panel_001"][0]
+	if got.ModelID != "wan22-ti2v-5b" || got.NativeFrames != 49 || got.QC.MetricsVersion != 2 || got.QC.WarpError != 0.03 {
+		t.Fatalf("Phase 3 ClipCandidate round-trip mismatch: %+v", got)
+	}
+}

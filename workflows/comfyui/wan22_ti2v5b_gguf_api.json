@@ -1,0 +1,125 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "Wan2.2-TI2V-5B-Q4_K_M.gguf"
+    },
+    "_meta": {
+      "title": "Load Wan2.2 5B GGUF"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "wan"
+    },
+    "_meta": {
+      "title": "Load UMT5 Text Encoder"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "wan2.2_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load Wan2.2 VAE"
+    }
+  },
+  "4": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "input.png"
+    },
+    "_meta": {
+      "title": "M2A_IMAGE"
+    }
+  },
+  "5": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "2D anime style, subtle motion, consistent character line art",
+      "clip": ["2", 0]
+    },
+    "_meta": {
+      "title": "M2A_POS"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "text, speech bubble, watermark, subtitles, deformed face, extra limbs, flicker",
+      "clip": ["2", 0]
+    },
+    "_meta": {
+      "title": "M2A_NEG"
+    }
+  },
+  "7": {
+    "class_type": "WanImageToVideo",
+    "inputs": {
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "vae": ["3", 0],
+      "start_image": ["4", 0],
+      "width": 480,
+      "height": 832,
+      "length": 49,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "M2A_LATENT"
+    }
+  },
+  "8": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 42
+    },
+    "_meta": {
+      "title": "M2A_SEED"
+    }
+  },
+  "9": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["1", 0],
+      "positive": ["7", 0],
+      "negative": ["7", 1],
+      "latent_image": ["7", 2],
+      "seed": 42,
+      "steps": 20,
+      "cfg": 5.0,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "M2A_SAMPLER"
+    }
+  },
+  "10": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["9", 0],
+      "vae": ["3", 0]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "11": {
+    "class_type": "SaveWEBM",
+    "inputs": {
+      "images": ["10", 0],
+      "filename_prefix": "m2a_wan22_5b_gguf",
+      "codec": "vp9",
+      "fps": 16.0,
+      "crf": 18.0
+    },
+    "_meta": {
+      "title": "M2A_OUTPUT"
+    }
+  }
+}

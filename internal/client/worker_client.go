@@ -46,7 +46,8 @@ type WorkerClient struct {
 	httpUnavailable atomic.Bool
 }
 
-// NewWorkerClient constructs a WorkerClient from config.
+// NewWorkerClient constructs a WorkerClient from config without a global HTTP timeout;
+// per-call context deadlines govern each stage.
 func NewWorkerClient(cfg *config.PipelineConfig) *WorkerClient {
 	host := "127.0.0.1"
 	port := 8100
@@ -60,13 +61,18 @@ func NewWorkerClient(cfg *config.PipelineConfig) *WorkerClient {
 	}
 
 	return &WorkerClient{
-		baseURL: fmt.Sprintf("http://%s:%d", host, port),
-		httpClient: &http.Client{
-			Timeout: 180 * time.Second,
-		},
-		cliScript: resolveCLIScript(),
-		pythonBin: resolvePythonBin(),
+		baseURL:    fmt.Sprintf("http://%s:%d", host, port),
+		httpClient: &http.Client{},
+		cliScript:  resolveCLIScript(),
+		pythonBin:  resolvePythonBin(),
 	}
+}
+
+func withDefaultTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, d)
 }
 
 func resolveCLIScript() string {
@@ -96,16 +102,22 @@ func resolveCLIScript() string {
 	return "workers/pipeline_cli.py"
 }
 
-func (c *WorkerClient) postJSON(ctx context.Context, endpoint string, payload any, out any) error {
-	body, err := json.Marshal(payload)
+func (c *WorkerClient) doJSON(ctx context.Context, method string, endpoint string, payload any, out any) error {
+	var bodyReader io.Reader
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		bodyReader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+endpoint, bodyReader)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -125,6 +137,10 @@ func (c *WorkerClient) postJSON(ctx context.Context, endpoint string, payload an
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+func (c *WorkerClient) postJSON(ctx context.Context, endpoint string, payload any, out any) error {
+	return c.doJSON(ctx, http.MethodPost, endpoint, payload, out)
 }
 
 func resolvePythonBin() string {
@@ -190,6 +206,36 @@ func (c *WorkerClient) call(ctx context.Context, endpoint string, payload any, c
 	return c.runCLI(ctx, cliArgs, out)
 }
 
+// HealthResponse describes Python worker daemon status and video model readiness.
+type HealthResponse struct {
+	Status         string            `json:"status"`
+	Device         string            `json:"device"`
+	Workers        map[string]string `json:"workers"`
+	VideoProviders map[string]string `json:"video_providers"`
+}
+
+// Health queries GET /health on the Python worker server.
+func (c *WorkerClient) Health(ctx context.Context) (*HealthResponse, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var res HealthResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/health", nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// FreeGPU requests the worker server to unload GPU models and release VRAM (`POST /gpu/free`).
+func (c *WorkerClient) FreeGPU(ctx context.Context) error {
+	if c.httpUnavailable.Load() {
+		return nil
+	}
+	ctx, cancel := withDefaultTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_ = c.postJSON(ctx, "/gpu/free", map[string]any{}, nil)
+	return nil
+}
+
 // IngestResult holds stitched strip dimensions.
 type IngestResult struct {
 	StitchedPath string `json:"stitched_path"`
@@ -199,6 +245,8 @@ type IngestResult struct {
 
 // Ingest stitches vertical manhwa pages into a single strip.
 func (c *WorkerClient) Ingest(ctx context.Context, pages []string, outputPath string) (*IngestResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 180*time.Second)
+	defer cancel()
 	var res IngestResult
 	payload := map[string]any{
 		"page_paths":   pages,
@@ -232,6 +280,8 @@ type SegmentResult struct {
 
 // Segment runs panel detection and saves individual panel crops.
 func (c *WorkerClient) Segment(ctx context.Context, imagePath string, outputDir string, method string) (*SegmentResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 180*time.Second)
+	defer cancel()
 	var res SegmentResult
 	payload := map[string]any{
 		"image_path": imagePath,
@@ -263,6 +313,8 @@ type UnderstandResult struct {
 
 // Understand analyzes a panel image for scene semantics, dialogue, and characters.
 func (c *WorkerClient) Understand(ctx context.Context, panelImagePath string, panelID string, lang string, readingOrder int, opts ...string) (*UnderstandResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 180*time.Second)
+	defer cancel()
 	var res UnderstandResult
 	payload := map[string]any{
 		"panel_image_path": panelImagePath,
@@ -299,6 +351,8 @@ type InpaintResult struct {
 
 // Inpaint removes speech bubbles and text regions from a panel image.
 func (c *WorkerClient) Inpaint(ctx context.Context, imagePath string, outputPath string, bboxes []model.BBox) (*InpaintResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 180*time.Second)
+	defer cancel()
 	var res InpaintResult
 	payload := map[string]any{
 		"image_path":    imagePath,
@@ -318,16 +372,53 @@ func (c *WorkerClient) Inpaint(ctx context.Context, imagePath string, outputPath
 	return &res, nil
 }
 
-// RenderResult holds the rendered clip path and measured QC scores.
+// RenderOptions holds optional Phase 3 I2V metadata for RenderClip.
+type RenderOptions struct {
+	PanelID      string
+	ModelID      string
+	Seed         int
+	ActionPrompt string
+	MotionType   string
+	Emotion      string
+	ComfyURL     string
+}
+
+// RenderResult holds the rendered clip path, provenance metadata, and measured QC scores.
 type RenderResult struct {
-	ClipPath    string         `json:"clip_path"`
-	FramesCount int            `json:"frames_count"`
-	DurationS   float64        `json:"duration_s"`
-	RouteUsed   string         `json:"route_used"`
-	QCScores    model.QCScores `json:"qc_scores"`
+	ClipPath       string         `json:"clip_path"`
+	RawClipPath    string         `json:"raw_clip_path,omitempty"`
+	FramesCount    int            `json:"frames_count"`
+	DurationS      float64        `json:"duration_s"`
+	RouteUsed      string         `json:"route_used"`
+	ModelID        string         `json:"model_id,omitempty"`
+	Seed           int            `json:"seed,omitempty"`
+	PositivePrompt string         `json:"positive_prompt,omitempty"`
+	NegativePrompt string         `json:"negative_prompt,omitempty"`
+	NativeWidth    int            `json:"native_width,omitempty"`
+	NativeHeight   int            `json:"native_height,omitempty"`
+	NativeFrames   int            `json:"native_frames,omitempty"`
+	NativeFPS      int            `json:"native_fps,omitempty"`
+	GenSeconds     float64        `json:"gen_seconds,omitempty"`
+	PeakVRAMGB     float64        `json:"peak_vram_gb,omitempty"`
+	Cached         bool           `json:"cached,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	QCScores       model.QCScores `json:"qc_scores"`
+}
+
+type renderJobCreateResp struct {
+	JobID string `json:"job_id"`
+}
+
+type renderJobStatusResp struct {
+	JobID  string        `json:"job_id"`
+	Status string        `json:"status"`
+	Result *RenderResult `json:"result,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 // RenderClip renders a panel animation clip and returns its QC scores.
+// For RouteI2V when the HTTP server is running, it submits an async job to POST /render/jobs,
+// polls GET /render/jobs/{id}, and sends DELETE /render/jobs/{id} if ctx is cancelled.
 func (c *WorkerClient) RenderClip(
 	ctx context.Context,
 	imagePath string,
@@ -338,18 +429,38 @@ func (c *WorkerClient) RenderClip(
 	fps int,
 	width int,
 	height int,
+	opts ...RenderOptions,
 ) (*RenderResult, error) {
-	var res RenderResult
-	payload := map[string]any{
-		"image_path":  imagePath,
-		"output_path": outputPath,
-		"route":       string(route),
-		"shot_type":   string(shot),
-		"duration_s":  durationS,
-		"fps":         fps,
-		"width":       width,
-		"height":      height,
+	timeout := 10 * time.Minute
+	if route == model.RouteI2V {
+		timeout = 30 * time.Minute
 	}
+	ctx, cancel := withDefaultTimeout(ctx, timeout)
+	defer cancel()
+
+	var opt RenderOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	payload := map[string]any{
+		"image_path":    imagePath,
+		"output_path":   outputPath,
+		"route":         string(route),
+		"shot_type":     string(shot),
+		"duration_s":    durationS,
+		"fps":           fps,
+		"width":         width,
+		"height":        height,
+		"panel_id":      opt.PanelID,
+		"model_id":      opt.ModelID,
+		"seed":          opt.Seed,
+		"action_prompt": opt.ActionPrompt,
+		"motion_type":   opt.MotionType,
+		"emotion":       opt.Emotion,
+		"comfy_url":     opt.ComfyURL,
+	}
+
 	args := []string{
 		"render",
 		"--image", imagePath,
@@ -361,10 +472,87 @@ func (c *WorkerClient) RenderClip(
 		"--width", strconv.Itoa(width),
 		"--height", strconv.Itoa(height),
 	}
+	if opt.ModelID != "" {
+		args = append(args, "--model-id", opt.ModelID)
+	}
+	if opt.Seed != 0 {
+		args = append(args, "--seed", strconv.Itoa(opt.Seed))
+	}
+	if opt.ActionPrompt != "" {
+		args = append(args, "--prompt", opt.ActionPrompt)
+	}
+	if opt.ComfyURL != "" {
+		args = append(args, "--comfy-url", opt.ComfyURL)
+	}
+
+	// For I2V over HTTP, prefer async job submission + polling (`POST /render/jobs`)
+	if route == model.RouteI2V && !c.httpUnavailable.Load() {
+		var created renderJobCreateResp
+		err := c.postJSON(ctx, "/render/jobs", payload, &created)
+		if err == nil && created.JobID != "" {
+			return c.pollRenderJob(ctx, created.JobID)
+		}
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.statusCode != http.StatusNotFound {
+			return nil, err
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+	}
+
+	var res RenderResult
 	if err := c.call(ctx, "/render", payload, args, &res); err != nil {
 		return nil, err
 	}
+	if res.Error != "" {
+		return &res, fmt.Errorf("render error: %s", res.Error)
+	}
 	return &res, nil
+}
+
+func (c *WorkerClient) pollRenderJob(ctx context.Context, jobID string) (*RenderResult, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = c.doJSON(delCtx, http.MethodDelete, "/render/jobs/"+jobID, nil, nil)
+			delCancel()
+			return nil, ctx.Err()
+		case <-ticker.C:
+			var st renderJobStatusResp
+			if err := c.doJSON(ctx, http.MethodGet, "/render/jobs/"+jobID, nil, &st); err != nil {
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = c.doJSON(delCtx, http.MethodDelete, "/render/jobs/"+jobID, nil, nil)
+					delCancel()
+				}
+				return nil, err
+			}
+			switch st.Status {
+			case "done":
+				if st.Result == nil {
+					return nil, fmt.Errorf("render job %s completed with nil result", jobID)
+				}
+				if st.Result.Error != "" {
+					return st.Result, fmt.Errorf("render job %s failed: %s", jobID, st.Result.Error)
+				}
+				return st.Result, nil
+			case "failed", "cancelled":
+				errMsg := st.Error
+				if errMsg == "" && st.Result != nil {
+					errMsg = st.Result.Error
+				}
+				if errMsg == "" {
+					errMsg = "job " + st.Status
+				}
+				return st.Result, fmt.Errorf("render job %s %s: %s", jobID, st.Status, errMsg)
+			}
+		}
+	}
 }
 
 // TTSResult holds synthesized speech audio metadata.
@@ -382,6 +570,8 @@ func (c *WorkerClient) SynthesizeTTS(
 	emotion string,
 	lang string,
 ) (*TTSResult, error) {
+	ctx, cancel := withDefaultTimeout(ctx, 180*time.Second)
+	defer cancel()
 	var res TTSResult
 	payload := map[string]any{
 		"text":        text,
@@ -416,7 +606,13 @@ type AssembleResult struct {
 }
 
 // Assemble compiles the final video timeline from state.json in runDir.
-func (c *WorkerClient) Assemble(ctx context.Context, runDir string, fps int, width int, height int) (*AssembleResult, error) {
+func (c *WorkerClient) Assemble(ctx context.Context, runDir string, fps int, width int, height int, totalDurationS ...float64) (*AssembleResult, error) {
+	assembleTimeout := 5 * time.Minute
+	if len(totalDurationS) > 0 && totalDurationS[0] > 0 {
+		assembleTimeout = 30*time.Second + time.Duration(3.0*totalDurationS[0]*float64(time.Second))
+	}
+	ctx, cancel := withDefaultTimeout(ctx, assembleTimeout)
+	defer cancel()
 	var res AssembleResult
 	payload := map[string]any{
 		"run_dir": filepath.ToSlash(runDir),
