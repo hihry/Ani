@@ -109,6 +109,8 @@ class UnderstandRequest(BaseModel):
     panel_id: str
     language: str = "ko"
     reading_order: Optional[int] = None
+    crops_dir: Optional[str] = None
+    annotated_path: Optional[str] = None
 
 
 class DialogueLineResponse(BaseModel):
@@ -267,6 +269,8 @@ def understand_panel(req: UnderstandRequest) -> UnderstandResponse:
         panel_id=req.panel_id,
         language=req.language,
         reading_order=req.reading_order,
+        crops_dir=Path(req.crops_dir) if req.crops_dir else None,
+        annotated_path=Path(req.annotated_path) if req.annotated_path else None,
     )
     return UnderstandResponse(**sem)
 

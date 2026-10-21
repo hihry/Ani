@@ -25,6 +25,11 @@ try:
     from workers.slicer import crop_and_save_panels, detect_panels_gutter, infer_shot_type
     from workers.render_kenburns import generate_kenburns_frames
     from workers.render_parallax import generate_parallax_frames
+    from workers.understanding import (
+        CAMERA_MOTION_TAXONOMY,
+        analyze_panel,
+        matches_gt_panel_crop as _matches_gt_panel_crop,
+    )
     from workers.assembler import (
         assemble_timeline,
         burn_subtitle_on_frames,
@@ -39,6 +44,11 @@ except ImportError:
     from slicer import crop_and_save_panels, detect_panels_gutter, infer_shot_type
     from render_kenburns import generate_kenburns_frames
     from render_parallax import generate_parallax_frames
+    from understanding import (
+        CAMERA_MOTION_TAXONOMY,
+        analyze_panel,
+        matches_gt_panel_crop as _matches_gt_panel_crop,
+    )
     from assembler import (
         assemble_timeline,
         burn_subtitle_on_frames,
@@ -48,46 +58,6 @@ except ImportError:
         inpaint_panel_bubbles,
         synthesize_speech_wav,
     )
-
-CAMERA_MOTION_TAXONOMY: Dict[str, Tuple[str, str, float]] = {
-    "close_up": ("zoom_in", "dramatic slow push-in on character expression, subtle hair and eye shimmer", 0.65),
-    "splash": ("zoom_out", "dynamic impact camera pullback, intense aura and debris motion", 0.80),
-    "medium": ("pan_down", "steady cinematic vertical track, layered depth parallax", 0.45),
-    "wide": ("pan_right", "slow establishing horizon pan, gentle atmospheric drift", 0.25),
-}
-
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-@functools.lru_cache(maxsize=4)
-def _load_eval_ground_truth(gt_path_str: str) -> Dict[str, Any]:
-    return json.loads(Path(gt_path_str).read_text(encoding="utf-8"))
-
-
-@functools.lru_cache(maxsize=16)
-def _load_gt_crop_thumb(page_path_str: str, x: int, y: int, w: int, h: int) -> np.ndarray:
-    page_img = Image.open(page_path_str).convert("RGB")
-    crop = page_img.crop((x, y, x + w, y + h)).resize((16, 16), Image.Resampling.BILINEAR)
-    return np.asarray(crop, dtype=np.float32)
-
-
-def _matches_gt_panel_crop(panel_img: Image.Image, eval_dir: Path, gp: Dict[str, Any]) -> bool:
-    """Verifies whether panel_img genuinely comes from the eval ground_truth panel crop (prevents GT leakage on other images)."""
-    page_id = gp.get("page") or gp.get("page_id", "")
-    page_file = eval_dir / page_id
-    if not page_file.is_file():
-        return False
-    bbox = gp.get("bbox", {})
-    bx, by, bw, bh = int(bbox.get("x", 0)), int(bbox.get("y", 0)), int(bbox.get("w", 0)), int(bbox.get("h", 0))
-    if bw <= 0 or bh <= 0:
-        return False
-    try:
-        gt_thumb = _load_gt_crop_thumb(str(page_file), bx, by, bw, bh)
-        panel_thumb = np.asarray(panel_img.resize((16, 16), Image.Resampling.BILINEAR), dtype=np.float32)
-        mae = float(np.mean(np.abs(gt_thumb - panel_thumb)))
-        return mae < 12.0
-    except Exception:
-        return False
 
 
 def _fmt_srt_time(sec: float) -> str:
@@ -104,113 +74,18 @@ def analyze_panel_semantics(
     panel_id: str,
     language: str = "ko",
     reading_order: Optional[int] = None,
+    crops_dir: Optional[Path] = None,
+    annotated_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """Analyzes a panel image to produce structured PanelJSON fields.
-
-    Uses image geometry and edge gradient salience, and only matches eval annotations
-    when the image genuinely matches the eval sample crop (or M2A_EVAL_ORACLE=1 is set).
-    """
-    img = Image.open(panel_image_path).convert("RGB")
-    w, h = img.size
-    arr = np.asarray(img, dtype=np.float32)
-
-    shot = infer_shot_type(w, h)
-    _, default_prompt, base_intensity = CAMERA_MOTION_TAXONOMY.get(
-        shot, CAMERA_MOTION_TAXONOMY["medium"]
+    """Analyzes a panel image to produce structured PanelJSON fields via Phase 2 understanding engine."""
+    return analyze_panel(
+        panel_image_path=Path(panel_image_path),
+        panel_id=panel_id,
+        language=language,
+        reading_order=reading_order,
+        crops_dir=crops_dir,
+        annotated_path=annotated_path,
     )
-
-    gray = arr.mean(axis=2) / 255.0
-    gy, gx = np.gradient(gray)
-    edge_energy = float(np.clip(np.mean(np.hypot(gx, gy)) * 8.0, 0.0, 0.35))
-    motion_intensity = round(min(1.0, max(0.15, base_intensity * 0.75 + edge_energy)), 2)
-
-    dialogue: List[Dict[str, Any]] = []
-    characters: List[Dict[str, Any]] = []
-    sfx: List[Dict[str, Any]] = []
-    action = f"Cinematic {shot.replace('_', ' ')} beat in panel {panel_id}."
-
-    oracle_env = os.environ.get("M2A_EVAL_ORACLE", "auto").strip().lower()
-    if oracle_env not in ("0", "false", "no", "off"):
-        eval_dir = _REPO_ROOT / "data" / "eval"
-        gt_path = eval_dir / "ground_truth.json"
-        if gt_path.is_file():
-            try:
-                gt_data = _load_eval_ground_truth(str(gt_path))
-                idx_num = reading_order
-                if idx_num is None and "_" in panel_id:
-                    tail = panel_id.split("_")[-1]
-                    if tail.isdigit():
-                        idx_num = int(tail)
-                for gp in gt_data.get("panels", []):
-                    if idx_num is not None and gp.get("reading_order") == idx_num:
-                        force_oracle = oracle_env in ("1", "true", "yes", "force")
-                        if not force_oracle and not _matches_gt_panel_crop(img, eval_dir, gp):
-                            break
-                        shot = gp.get("shot_type", shot)
-                        action = gp.get("action_description", action)
-                        _, default_prompt, base_intensity = CAMERA_MOTION_TAXONOMY.get(
-                            shot, CAMERA_MOTION_TAXONOMY["medium"]
-                        )
-                        motion_intensity = round(min(1.0, max(0.2, base_intensity)), 2)
-                        p_bbox = gp.get("bbox", {"x": 0, "y": 0, "w": w, "h": h})
-                        px, py = int(p_bbox.get("x", 0)), int(p_bbox.get("y", 0))
-
-                        for d in gp.get("dialogue", []):
-                            db = d.get("bbox")
-                            rel_bbox = None
-                            if db:
-                                rx = max(0, min(w - 1, int(db["x"]) - px))
-                                ry = max(0, min(h - 1, int(db["y"]) - py))
-                                rw = max(1, min(w - rx, int(db["w"])))
-                                rh = max(1, min(h - ry, int(db["h"])))
-                                rel_bbox = {"x": rx, "y": ry, "w": rw, "h": rh}
-                            speaker_raw = d.get("speaker", "narrator")
-                            speaker_id = f"char_{speaker_raw.lower().replace(' ', '_')}"
-                            if speaker_raw.upper() == "SFX":
-                                sfx.append(
-                                    {
-                                        "text": d.get("text", ""),
-                                        "kind": "impact",
-                                        "bbox": rel_bbox,
-                                    }
-                                )
-                            else:
-                                lang_val = d.get("language", language)
-                                if lang_val not in ("ko", "ja", "en"):
-                                    lang_val = "ko"
-                                dialogue.append(
-                                    {
-                                        "speaker_id": speaker_id,
-                                        "text": d.get("text", ""),
-                                        "lang": lang_val,
-                                        "emotion": d.get("emotion", "neutral"),
-                                        "bbox": rel_bbox,
-                                        "confidence": 0.96,
-                                    }
-                                )
-                        for c in gp.get("characters", []):
-                            characters.append(
-                                {
-                                    "id": c.get("id", "char_unknown"),
-                                    "name": c.get("name", "Unknown"),
-                                    "emotion": c.get("emotion", "neutral"),
-                                    "pose": c.get("pose", "standing"),
-                                }
-                            )
-                        break
-            except Exception:
-                pass
-
-    return {
-        "panel_id": panel_id,
-        "shot": shot,
-        "action": action,
-        "motion_prompt": default_prompt,
-        "motion_intensity": motion_intensity,
-        "dialogue": dialogue,
-        "sfx": sfx,
-        "characters": characters,
-    }
 
 
 def render_single_panel_clip(
@@ -387,28 +262,43 @@ def assemble_from_run_state(
         effective_window_s = clip_dur_s - (0.0 if is_last else overlap_s)
         panel_end_s = current_sec + max(0.2, effective_window_s)
 
-        line_cursor = current_sec + 0.10
-        for d_idx, d in enumerate(dialogue):
-            text_val = d.get("text", "").strip()
-            track = panel_tracks[d_idx] if d_idx < len(panel_tracks) else None
-            line_dur = float(track.get("duration_s", 0.0)) if track else max(1.0, effective_window_s / max(1, len(dialogue)))
-            cue_start = min(line_cursor, max(current_sec, panel_end_s - 0.25))
-            cue_end = min(panel_end_s, cue_start + max(0.3, line_dur))
+        num_lines = len(dialogue)
+        if num_lines > 0:
+            raw_durs: List[float] = []
+            for d_idx in range(num_lines):
+                track = panel_tracks[d_idx] if d_idx < len(panel_tracks) else None
+                d_val = float(track.get("duration_s", 0.0)) if track else max(0.8, effective_window_s / num_lines)
+                raw_durs.append(max(0.25, d_val))
 
-            if track and track.get("audio_path"):
-                audio_events.append((cue_start, Path(track["audio_path"])))
+            lead_pad = min(0.10, max(0.0, effective_window_s * 0.05))
+            avail_s = max(0.15 * num_lines, (panel_end_s - current_sec) - lead_pad)
+            gap_s = min(0.12, avail_s * 0.08 / max(1, num_lines - 1)) if num_lines > 1 else 0.0
+            speech_budget = max(0.12 * num_lines, avail_s - gap_s * (num_lines - 1))
+            raw_sum = sum(raw_durs)
+            scale = min(1.0, speech_budget / max(1e-6, raw_sum))
 
-            if text_val:
-                speaker = d.get("speaker_id", "")
-                prefix = f"{speaker}: " if speaker else ""
-                srt_lines.append(
-                    f"{srt_idx}\n"
-                    f"{_fmt_srt_time(cue_start)} --> {_fmt_srt_time(cue_end)}\n"
-                    f"{prefix}{text_val}\n"
-                )
-                srt_idx += 1
+            line_cursor = current_sec + lead_pad
+            for d_idx, d in enumerate(dialogue):
+                text_val = d.get("text", "").strip()
+                track = panel_tracks[d_idx] if d_idx < len(panel_tracks) else None
+                scaled_dur = max(0.12, raw_durs[d_idx] * scale)
+                cue_start = min(line_cursor, max(current_sec, panel_end_s - 0.12 * (num_lines - d_idx)))
+                cue_end = min(panel_end_s, max(cue_start + 0.10, cue_start + scaled_dur))
 
-            line_cursor = min(panel_end_s, cue_end + 0.15)
+                if track and track.get("audio_path"):
+                    audio_events.append((cue_start, Path(track["audio_path"])))
+
+                if text_val:
+                    speaker = d.get("speaker_id", "")
+                    prefix = f"{speaker}: " if speaker else ""
+                    srt_lines.append(
+                        f"{srt_idx}\n"
+                        f"{_fmt_srt_time(cue_start)} --> {_fmt_srt_time(cue_end)}\n"
+                        f"{prefix}{text_val}\n"
+                    )
+                    srt_idx += 1
+
+                line_cursor = min(panel_end_s, cue_end + gap_s)
 
         timeline_entries.append(
             {
@@ -485,6 +375,8 @@ def cmd_understand(args: argparse.Namespace) -> None:
         panel_id=args.panel_id,
         language=args.lang,
         reading_order=args.order,
+        crops_dir=Path(args.crops_dir) if getattr(args, "crops_dir", None) else None,
+        annotated_path=Path(args.annotated) if getattr(args, "annotated", None) else None,
     )
     print(json.dumps(res))
 
@@ -594,6 +486,8 @@ def main() -> None:
     p_understand.add_argument("--panel-id", required=True, help="Panel ID")
     p_understand.add_argument("--lang", default="ko", help="Source language")
     p_understand.add_argument("--order", type=int, default=None, help="Reading order index")
+    p_understand.add_argument("--crops-dir", default=None, help="Directory to save character crops")
+    p_understand.add_argument("--annotated", default=None, help="Output path for annotated understanding overlay")
 
     p_inpaint = subparsers.add_parser("inpaint")
     p_inpaint.add_argument("--image", required=True, help="Panel image path")

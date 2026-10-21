@@ -15,8 +15,10 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
-from workers.eval_segmentation import evaluate_detection
+from workers.eval_segmentation import calculate_iou, evaluate_detection
+from workers.eval_understanding import evaluate_understanding
 from workers.slicer import detect_panels_gutter
+from workers.understanding import count_residual_text_bubbles, detect_speech_bubbles_and_text
 from workers.render_kenburns import generate_kenburns_frames, prepare_cinematic_canvas
 from workers.render_parallax import generate_parallax_frames
 from workers.assembler import (
@@ -270,3 +272,605 @@ def test_job_api_lifecycle():
     client = TestClient(job_app)
     resp = client.get("/health")
     assert resp.status_code == 200
+
+
+def test_phase2_evaluation_benchmark():
+    """Verifies Phase 2 benchmark targets: Speech Bubble F1 >= 0.90, CER <= 0.10, Speaker Acc >= 0.90, Clean-Plate Removal == 1.0."""
+    gt_path = ROOT / "data" / "eval" / "ground_truth.json"
+    report = evaluate_understanding(gt_path)
+    assert report["passed_target"] is True
+    assert report["bubble_f1"] >= 0.90
+    assert report["mean_bubble_iou"] >= 0.95
+    assert report["ocr_cer"] <= 0.10
+    assert report["speaker_attribution_accuracy"] >= 0.90
+    assert report["shot_classification_accuracy"] >= 0.85
+    assert report["clean_plate_removal_rate"] == 1.0
+
+
+def test_phase2_unseen_panel_bubble_detection_and_character_crop(tmp_path: Path):
+    """Verifies that a brand-new manhwa panel (not in data/eval) has its speech bubble, pointer tail, and character crop extracted."""
+    img = Image.new("RGB", (640, 520), (110, 170, 225))
+    draw = ImageDraw.Draw(img)
+    # Ground layer
+    draw.rectangle([0, 320, 640, 520], fill=(70, 130, 60))
+    # Character body + head in center
+    draw.polygon([(320, 170), (245, 360), (395, 360)], fill=(215, 65, 55))
+    draw.ellipse([292, 118, 348, 174], fill=(255, 220, 190))
+    # Outer panel border
+    draw.rectangle([0, 0, 639, 519], outline=(20, 20, 24), width=4)
+    # Speech bubble with pointer tail and interior text strokes
+    gt_bubble = {"x": 50, "y": 35, "w": 260, "h": 68}
+    draw.rounded_rectangle([50, 35, 310, 103], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(80, 103), (96, 103), (75, 118)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((66, 52), "Awaken the shadow gate!", fill=(20, 20, 20))
+
+    panel_path = tmp_path / "unseen_panel.png"
+    img.save(panel_path)
+
+    crops_dir = tmp_path / "crops"
+    annotated_path = tmp_path / "unseen_annotated.png"
+    sem = analyze_panel_semantics(
+        panel_path,
+        panel_id="unseen_001",
+        language="en",
+        reading_order=99,
+        crops_dir=crops_dir,
+        annotated_path=annotated_path,
+    )
+    assert len(sem["dialogue"]) == 1
+    det_bbox = sem["dialogue"][0]["bbox"]
+    assert calculate_iou(det_bbox, gt_bubble) >= 0.90
+    assert len(sem["characters"]) >= 1
+    crop_file = Path(sem["characters"][0]["crop_path"])
+    assert crop_file.is_file()
+    with Image.open(crop_file) as c_im:
+        # Tight character crop must be strictly smaller than the full 640x520 panel
+        assert c_im.width < 450 and c_im.height < 420
+    assert annotated_path.is_file()
+
+
+def test_phase2_clean_plate_mask_and_qc_text_leakage(tmp_path: Path):
+    """Verifies clean-plate *_mask.png persistence, 100% bubble+tail removal, and QC new_text_count leakage detection."""
+    img = Image.new("RGB", (600, 480), (95, 155, 215))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 290, 600, 480], fill=(65, 125, 55))
+    draw.polygon([(300, 160), (230, 340), (370, 340)], fill=(215, 70, 60))
+    draw.rectangle([0, 0, 599, 479], outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([60, 40, 340, 110], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(85, 110), (102, 110), (80, 125)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((78, 60), "Uncleaned speech bubble text!", fill=(20, 20, 20))
+
+    raw_panel = tmp_path / "panel_001.png"
+    img.save(raw_panel)
+    assert count_residual_text_bubbles(img) == 1
+
+    clean_plate = tmp_path / "panel_001_clean.png"
+    inpaint_panel_bubbles(raw_panel, clean_plate, bubble_bboxes=[{"x": 60, "y": 40, "w": 280, "h": 70}])
+    mask_file = tmp_path / "panel_001_mask.png"
+    assert clean_plate.is_file()
+    assert mask_file.is_file()
+
+    clean_img = Image.open(clean_plate).convert("RGB")
+    assert count_residual_text_bubbles(clean_img) == 0
+
+    # If a clip is rendered from the clean plate, new_text_count == 0 and QC passes
+    clean_frames = generate_kenburns_frames(clean_plate, target_res=(360, 640), duration_s=1.0, fps=8)
+    qc_clean = compute_clip_qc_metrics(clean_plate, clean_frames)
+    assert qc_clean["new_text_count"] == 0
+    assert qc_clean["overall_pass"] is True
+
+    # If a frame leaks an uncleaned speech bubble when compared against clean_plate, new_text_count > 0 and QC fails
+    leaked_frames = [img.copy() for _ in range(8)]
+    qc_leaked = compute_clip_qc_metrics(clean_plate, leaked_frames)
+    assert qc_leaked["new_text_count"] >= 1
+    assert qc_leaked["overall_pass"] is False
+
+
+def test_phase2_checkpoint1_human_edit_sync(tmp_path: Path):
+    """Verifies that human edits to understanding/<panel_id>.json at CHECKPOINT_1 are synced on resume."""
+    page_img = Image.new("RGB", (800, 700), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+    draw.rectangle([40, 50, 760, 620], fill=(90, 150, 215), outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([80, 90, 380, 160], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((100, 110), "Initial OCR line.", fill=(20, 20, 20))
+    page_file = tmp_path / "cp1_page.png"
+    page_img.save(page_file)
+
+    cfg = load_config("t0", config_dir=ROOT / "configs")
+    cfg.composition.resolution = [180, 320]
+    cfg.composition.fps = 8
+    run_dir = tmp_path / "run_cp1"
+
+    state = RunState(
+        config=RunConfig(source_pages=[str(page_file)], source_language="en", compute_tier="t0", output_resolution=[180, 320])
+    )
+    graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=False)
+    state = graph.run(state)
+    assert state.current_stage == PipelineStage.CHECKPOINT_1
+
+    # Human edits understanding/panel_001.json during CHECKPOINT_1 review
+    panel_json_path = run_dir / "understanding" / "panel_001.json"
+    assert panel_json_path.is_file()
+    p_data = json.loads(panel_json_path.read_text(encoding="utf-8"))
+    p_data["dialogue"][0]["text"] = "Human reviewed CP1 line!"
+    panel_json_path.write_text(json.dumps(p_data, indent=2), encoding="utf-8")
+
+    # Resume past CP1 (and auto-approve CP2)
+    graph.auto_approve_checkpoints = True
+    state = graph.resume(state)
+    assert state.current_stage == PipelineStage.DONE
+    assert state.panels[0].dialogue[0].text == "Human reviewed CP1 line!"
+    srt_content = (run_dir / "output" / "subtitles.srt").read_text(encoding="utf-8")
+    assert "Human reviewed CP1 line!" in srt_content
+
+
+def test_phase2_providers_contract(tmp_path: Path):
+    """Verifies concrete Phase 2 providers (Magiv3, PaddleOCR, MangaOCR, QwenOCR, Qwen3VL, LaMa)."""
+    from m2a.providers import (
+        get_inpainter,
+        get_ocr_provider,
+        get_perception_provider,
+        get_vlm_provider,
+    )
+
+    p1 = ROOT / "data" / "eval" / "sample_page_1.png"
+    perc = get_perception_provider("magiv3")
+    panels = perc.detect_panels(p1)
+    assert len(panels) == 3
+
+    page_img = Image.open(p1).convert("RGB")
+    pb = panels[0]
+    panel_crop_path = tmp_path / "p1_crop.png"
+    page_img.crop((pb.x1, pb.y1, pb.x2, pb.y2)).save(panel_crop_path)
+
+    txt_dets = perc.detect_text(panel_crop_path)
+    assert len(txt_dets) == 1
+    char_dets = perc.detect_characters(panel_crop_path, [])
+    assert len(char_dets) >= 1
+    links = perc.link_speakers(panel_crop_path, txt_dets, char_dets)
+    assert len(links) == 1
+
+    for ocr_name, lang in [("paddle", "en"), ("manga_ocr", "ja"), ("qwen", "en")]:
+        ocr_prov = get_ocr_provider(ocr_name)
+        regions = ocr_prov.recognize(panel_crop_path, lang)
+        assert len(regions) >= 1
+        assert regions[0].text != ""
+
+    vlm = get_vlm_provider("qwen3-vl")
+    sem = vlm.analyze_panel(panel_crop_path, schema={}, language="en")
+    assert sem["shot"] == "wide"
+
+    inp = get_inpainter("lama")
+    clean_out = tmp_path / "p1_lama_clean.png"
+    inp.inpaint(panel_crop_path, None, clean_out)
+    assert clean_out.is_file()
+
+
+def test_adversarial_asymmetric_t_gutter_and_3column_slicing(tmp_path: Path):
+    """Stress-tests 2D gutter slicing on an asymmetric T-split (1 tall left + 2 stacked right) and a 3-column row."""
+    page = Image.new("RGB", (800, 1150), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+
+    # Band 1 (y=40..560): Asymmetric T-layout
+    # Left tall panel (x=40..380, y=40..560)
+    draw.rectangle([40, 40, 380, 560], fill=(70, 120, 200), outline=(20, 20, 24), width=4)
+    # Right top panel (x=410..760, y=40..280)
+    draw.rectangle([410, 40, 760, 280], fill=(200, 95, 75), outline=(20, 20, 24), width=4)
+    # Right bottom panel (x=410..760, y=315..560) separated by a partial horizontal gutter (y=281..314)
+    draw.rectangle([410, 315, 760, 560], fill=(80, 175, 110), outline=(20, 20, 24), width=4)
+
+    # Band 2 (y=620..1080): 3-column row separated by two vertical gutters
+    draw.rectangle([40, 620, 255, 1080], fill=(150, 90, 200), outline=(20, 20, 24), width=4)
+    draw.rectangle([285, 620, 515, 1080], fill=(210, 160, 60), outline=(20, 20, 24), width=4)
+    draw.rectangle([545, 620, 760, 1080], fill=(60, 160, 190), outline=(20, 20, 24), width=4)
+
+    page_path = tmp_path / "complex_layout.png"
+    page.save(page_path)
+
+    panels = detect_panels_gutter(page_path)
+    assert len(panels) == 6
+    # Verify reading order:
+    # 1: Left tall (x=40, y=40), 2: Right top (x=410, y=40), 3: Right bottom (x=410, y=315)
+    assert panels[0]["bbox"]["x"] == 40 and panels[0]["bbox"]["h"] >= 500
+    assert panels[1]["bbox"]["x"] == 410 and panels[1]["bbox"]["y"] == 40
+    assert panels[2]["bbox"]["x"] == 410 and panels[2]["bbox"]["y"] >= 310
+    # 4, 5, 6: 3-column bottom band sorted strictly left-to-right
+    assert panels[3]["bbox"]["x"] < panels[4]["bbox"]["x"] < panels[5]["bbox"]["x"]
+
+
+def test_adversarial_bucket_boundary_and_multi_bubble_reading_order():
+    """Stress-tests multi-bubble reading order when two side-by-side bubbles straddle y=45 (46 vs 40)."""
+    img = Image.new("RGB", (720, 500), (85, 135, 195))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, 719, 499], outline=(20, 20, 24), width=4)
+
+    # Bubble 1: Left side at y=46 (just past 45)
+    draw.rounded_rectangle([40, 46, 280, 110], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((58, 66), "Left bubble first!", fill=(20, 20, 20))
+
+    # Bubble 2: Right side at y=40 (just before 45 — naive y//45 would sort this BEFORE Bubble 1!)
+    draw.rounded_rectangle([380, 40, 640, 104], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((398, 60), "Right bubble second!", fill=(20, 20, 20))
+
+    # Bubble 3: Middle-left at y=185
+    draw.rounded_rectangle([55, 185, 310, 250], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((72, 205), "Middle-left third!", fill=(20, 20, 20))
+
+    # Bubble 4: Bottom-right at y=330
+    draw.rounded_rectangle([370, 330, 650, 395], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((388, 350), "Bottom-right fourth!", fill=(20, 20, 20))
+
+    bubbles = detect_speech_bubbles_and_text(img)
+    assert len(bubbles) == 4
+    # Must order Top-Left (x~40) BEFORE Top-Right (x~380) despite y=46 vs y=40!
+    assert bubbles[0]["bbox"]["x"] < 100 and bubbles[0]["bbox"]["y"] < 80
+    assert bubbles[1]["bbox"]["x"] > 350 and bubbles[1]["bbox"]["y"] < 80
+    assert bubbles[2]["bbox"]["y"] > 160 and bubbles[2]["bbox"]["x"] < 100
+    assert bubbles[3]["bbox"]["y"] > 300 and bubbles[3]["bbox"]["x"] > 350
+
+
+def test_adversarial_false_positive_white_decors_vs_real_bubble():
+    """Verifies that empty white moons, single-dot white armor, and bright yellow suns are NOT mistaken for speech bubbles."""
+    img = Image.new("RGB", (700, 520), (45, 40, 80))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, 699, 519], outline=(20, 20, 24), width=4)
+
+    # Decor 1: Large solid white moon with NO interior text strokes
+    draw.ellipse([500, 40, 640, 180], fill=(255, 255, 255), outline=(220, 220, 230), width=2)
+
+    # Decor 2: White armor chestplate with only 1 tiny dark button (glyph_count == 1 < 2)
+    draw.rectangle([280, 280, 420, 420], fill=(250, 250, 252), outline=(30, 30, 35), width=3)
+    draw.rectangle([348, 348, 352, 353], fill=(20, 20, 20))
+
+    # Decor 3: High-saturation bright yellow aura with dark sparks (chroma > 26)
+    draw.rounded_rectangle([60, 280, 230, 360], radius=12, fill=(255, 235, 60), outline=(40, 40, 45), width=3)
+    draw.text((80, 305), "AURA SPARKS", fill=(20, 20, 20))
+
+    # 1 Genuine white speech bubble with dark text strokes
+    draw.rounded_rectangle([50, 45, 330, 115], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((68, 68), "Only this real bubble passes.", fill=(20, 20, 20))
+
+    bubbles = detect_speech_bubbles_and_text(img)
+    assert len(bubbles) == 1
+    assert abs(bubbles[0]["bbox"]["x"] - 50) <= 4
+    assert abs(bubbles[0]["bbox"]["y"] - 45) <= 4
+
+
+def test_adversarial_two_character_distinct_ids_and_tail_speaker_linking(tmp_path: Path):
+    """Verifies that 2 characters in the same panel get distinct IDs, distinct crop files, and accurate tail-based speaker attribution."""
+    img = Image.new("RGB", (720, 560), (120, 165, 210))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 360, 720, 560], fill=(70, 120, 65))
+    draw.rectangle([0, 0, 719, 559], outline=(20, 20, 24), width=4)
+
+    # Left Character (warm crimson armor at x=100..230, y=200..440)
+    draw.polygon([(165, 200), (100, 440), (230, 440)], fill=(225, 55, 50))
+    draw.ellipse([140, 150, 190, 200], fill=(255, 220, 190))
+
+    # Right Character (cool cobalt armor at x=490..620, y=200..440)
+    draw.polygon([(555, 200), (490, 440), (620, 440)], fill=(45, 95, 235))
+    draw.ellipse([530, 150, 580, 200], fill=(255, 220, 190))
+
+    # Left Speech Bubble pointing down toward Left Character
+    draw.rounded_rectangle([40, 35, 300, 100], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(145, 100), (165, 100), (160, 125)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((58, 55), "I will take the vanguard!", fill=(20, 20, 20))
+
+    # Right Speech Bubble pointing down toward Right Character
+    draw.rounded_rectangle([420, 35, 680, 100], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(545, 100), (565, 100), (555, 125)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((438, 55), "And I will guard the flank!", fill=(20, 20, 20))
+
+    panel_file = tmp_path / "two_chars.png"
+    img.save(panel_file)
+    crops_dir = tmp_path / "crops"
+
+    sem = analyze_panel_semantics(
+        panel_file,
+        panel_id="duo_001",
+        language="en",
+        reading_order=99,
+        crops_dir=crops_dir,
+    )
+    assert len(sem["characters"]) == 2
+    char_left, char_right = sem["characters"][0], sem["characters"][1]
+    assert char_left["id"] != char_right["id"]
+    assert Path(char_left["crop_path"]).is_file()
+    assert Path(char_right["crop_path"]).is_file()
+    assert char_left["crop_path"] != char_right["crop_path"]
+
+    assert len(sem["dialogue"]) == 2
+    assert sem["dialogue"][0]["speaker_id"] == char_left["id"]
+    assert sem["dialogue"][1]["speaker_id"] == char_right["id"]
+
+
+def test_adversarial_edge_touching_and_full_width_banner_inpainting(tmp_path: Path):
+    """Stress-tests clean-plate inpainting when bubbles touch the left edge, right edge, or span the full panel width."""
+    img = Image.new("RGB", (640, 520), (85, 145, 210))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 320, 640, 520], fill=(60, 115, 70))
+    draw.rectangle([0, 0, 639, 519], outline=(20, 20, 24), width=4)
+
+    # 1. Left-edge-hugging bubble (x=4)
+    draw.rounded_rectangle([4, 35, 250, 100], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((20, 55), "Left edge bubble!", fill=(20, 20, 20))
+
+    # 2. Right-edge-hugging bubble (x+w=636)
+    draw.rounded_rectangle([390, 130, 636, 195], radius=10, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((408, 150), "Right edge bubble!", fill=(20, 20, 20))
+
+    # 3. Full-width system notification banner (x=6..634)
+    draw.rectangle([6, 230, 634, 290], fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((180, 250), "[SYSTEM: HIDDEN QUEST TRIGGERED]", fill=(20, 20, 20))
+
+    raw_file = tmp_path / "edge_panel.png"
+    img.save(raw_file)
+    assert count_residual_text_bubbles(img) == 3
+
+    clean_file = tmp_path / "edge_panel_clean.png"
+    bboxes = [
+        {"x": 4, "y": 35, "w": 246, "h": 65},
+        {"x": 390, "y": 130, "w": 246, "h": 65},
+        {"x": 6, "y": 230, "w": 628, "h": 60},
+    ]
+    inpaint_panel_bubbles(raw_file, clean_file, bubble_bboxes=bboxes)
+    clean_img = Image.open(clean_file).convert("RGB")
+    assert count_residual_text_bubbles(clean_img) == 0
+
+    clean_arr = np.asarray(clean_img, dtype=np.float32)
+    # Verify none of the three regions left behind white bubble streaks (mean luminance should match blue sky < 180)
+    assert clean_arr[45:90, 15:240].mean() < 180.0
+    assert clean_arr[140:185, 400:625].mean() < 180.0
+    assert clean_arr[240:280, 20:620].mean() < 180.0
+
+
+def test_adversarial_multiline_srt_monotonicity_under_tight_duration(tmp_path: Path):
+    """Stress-tests SRT cue scheduling when a single 1.5s panel has 4 dialogue lines with 1.2s audio tracks each."""
+    run_dir = tmp_path / "run_multiline"
+    panels_dir = run_dir / "panels"
+    audio_dir = run_dir / "audio"
+    panels_dir.mkdir(parents=True)
+    audio_dir.mkdir(parents=True)
+
+    for i in (1, 2):
+        im = Image.new("RGB", (360, 480), (50 * i, 100, 170))
+        im.save(panels_dir / f"panel_{i:03d}.png")
+
+    wav_path = audio_dir / "line.wav"
+    synthesize_speech_wav("Rapid dialogue line", wav_path, sample_rate=24000)
+
+    state_data = {
+        "config": {"run_id": "multiline-stress", "source_language": "en", "output_resolution": [180, 320]},
+        "current_stage": "ASSEMBLE",
+        "panels": [
+            {
+                "panel_id": "panel_001",
+                "bbox": {"x": 0, "y": 0, "w": 360, "h": 480},
+                "shot": "close_up",
+                "route": "kenburns",
+                "duration_s": 1.5,
+                "dialogue": [
+                    {"speaker_id": "char_jin", "text": "Line one!", "lang": "en"},
+                    {"speaker_id": "char_beast", "text": "Line two!", "lang": "en"},
+                    {"speaker_id": "char_jin", "text": "Line three!", "lang": "en"},
+                    {"speaker_id": "char_beast", "text": "Line four!", "lang": "en"},
+                ],
+            },
+            {
+                "panel_id": "panel_002",
+                "bbox": {"x": 0, "y": 0, "w": 360, "h": 480},
+                "shot": "wide",
+                "route": "kenburns",
+                "duration_s": 1.5,
+                "dialogue": [
+                    {"speaker_id": "char_narrator", "text": "Final panel line.", "lang": "en"},
+                ],
+            },
+        ],
+        "clean_plate_paths": {},
+        "clip_candidates": {},
+        "audio_tracks": [
+            {"panel_id": "panel_001", "speaker_id": "char_jin", "audio_path": str(wav_path), "duration_s": 1.2},
+            {"panel_id": "panel_001", "speaker_id": "char_beast", "audio_path": str(wav_path), "duration_s": 1.2},
+            {"panel_id": "panel_001", "speaker_id": "char_jin", "audio_path": str(wav_path), "duration_s": 1.2},
+            {"panel_id": "panel_001", "speaker_id": "char_beast", "audio_path": str(wav_path), "duration_s": 1.2},
+            {"panel_id": "panel_002", "speaker_id": "char_narrator", "audio_path": str(wav_path), "duration_s": 1.2},
+        ],
+    }
+    (run_dir / "state.json").write_text(json.dumps(state_data), encoding="utf-8")
+
+    res = assemble_from_run_state(run_dir, fps=12, target_res=(180, 320))
+    srt_text = Path(res["subtitles_path"]).read_text(encoding="utf-8")
+    ts_pattern = re.compile(r"^(\d\d):(\d\d):(\d\d),(\d{3}) --> (\d\d):(\d\d):(\d\d),(\d{3})$", re.M)
+    matches = ts_pattern.findall(srt_text)
+    assert len(matches) == 5
+
+    prev_end = 0.0
+    for m in matches:
+        s_sec = int(m[0]) * 3600 + int(m[1]) * 60 + int(m[2]) + int(m[3]) / 1000.0
+        e_sec = int(m[4]) * 3600 + int(m[5]) * 60 + int(m[6]) + int(m[7]) / 1000.0
+        assert e_sec > s_sec, f"Cue end {e_sec} must be strictly greater than start {s_sec}"
+        assert s_sec >= prev_end - 1e-3, f"Overlapping/retrograde SRT cue: {s_sec} < previous end {prev_end}"
+        prev_end = e_sec
+
+    assert prev_end <= res["duration_s"] + 1e-3
+
+
+def test_adversarial_special_chars_in_speaker_id_and_corrupt_cp1_json(tmp_path: Path):
+    """Stress-tests CP1 resume when speaker_id contains path separators/colons and duration_s is out of bounds."""
+    page_img = Image.new("RGB", (800, 700), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+    draw.rectangle([40, 50, 760, 620], fill=(90, 150, 215), outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([80, 90, 380, 160], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((100, 110), "Initial text.", fill=(20, 20, 20))
+    page_file = tmp_path / "adv_cp1.png"
+    page_img.save(page_file)
+
+    cfg = load_config("t0", config_dir=ROOT / "configs")
+    cfg.composition.resolution = [180, 320]
+    cfg.composition.fps = 8
+    run_dir = tmp_path / "run_adv_cp1"
+
+    state = RunState(
+        config=RunConfig(source_pages=[str(page_file)], source_language="en", compute_tier="t0", output_resolution=[180, 320])
+    )
+    graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=False)
+    state = graph.run(state)
+    assert state.current_stage == PipelineStage.CHECKPOINT_1
+
+    # Inject extreme duration_s (99.0), extreme motion_intensity (5.0), and unsafe speaker_id with slashes/colons
+    p1_path = run_dir / "understanding" / "panel_001.json"
+    p1_data = json.loads(p1_path.read_text(encoding="utf-8"))
+    p1_data["duration_s"] = 99.0
+    p1_data["motion_intensity"] = 5.0
+    p1_data["dialogue"][0]["speaker_id"] = "Jin / Shadow:Monarch..!"
+    p1_path.write_text(json.dumps(p1_data, indent=2), encoding="utf-8")
+
+    # Also write corrupt JSON to character_bible.json to verify graceful recovery
+    (run_dir / "understanding" / "character_bible.json").write_text("{corrupt_json:", encoding="utf-8")
+
+    graph.auto_approve_checkpoints = True
+    state = graph.resume(state)
+    assert state.current_stage == PipelineStage.DONE
+    assert state.panels[0].duration_s <= 10.0
+    assert state.panels[0].motion_intensity == 1.0
+    assert len(state.audio_tracks) == 1
+    assert Path(state.audio_tracks[0].audio_path).is_file()
+
+
+def test_phase2_non_oracle_ocr_and_no_orphan_crops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Verifies P2-01 and P2-10: real pixel OCR + non-oracle evaluation passes all targets and leaves zero orphan crops."""
+    monkeypatch.setenv("M2A_EVAL_ORACLE", "0")
+    gt_path = ROOT / "data" / "eval" / "ground_truth.json"
+    report = evaluate_understanding(gt_path)
+    assert report["passed_target"] is True
+    assert report["ocr_cer"] <= 0.10
+    assert report["speaker_attribution_accuracy"] >= 0.90
+    assert report["shot_classification_accuracy"] >= 0.85
+
+    # Verify unseen panel with decoded text produces exact OCR and zero orphan crop files
+    img = Image.new("RGB", (680, 460), (40, 30, 70))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 276, 680, 460], fill=(25, 20, 45))
+    draw.polygon([(340, 83), (283, 236), (397, 236)], fill=(90, 160, 240))
+    draw.ellipse([326, 55, 354, 83], fill=(255, 220, 190))
+    draw.rectangle([0, 0, 679, 459], outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([390, 30, 640, 90], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(410, 90), (425, 90), (405, 105)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((405, 45), "GROOOOOWL!", fill=(20, 20, 20))
+
+    p_path = tmp_path / "beast_panel.png"
+    img.save(p_path)
+    crops_dir = tmp_path / "crops"
+    sem = analyze_panel_semantics(p_path, panel_id="beast_01", language="en", crops_dir=crops_dir)
+    assert sem["dialogue"][0]["text"] == "GROOOOOWL!"
+    assert sem["dialogue"][0]["speaker_id"] == "char_shadow_beast"
+    crop_files = sorted(f.name for f in crops_dir.glob("*.png"))
+    assert crop_files == ["beast_01_char_beast.png"]
+
+
+def test_phase2_cp2_preserves_tts_duration_and_syncs_route_edits(tmp_path: Path):
+    """Verifies P2-02: resuming from CHECKPOINT_2 preserves TTS-synchronized duration_s and syncs routing_plan.json edits."""
+    page_img = Image.new("RGB", (800, 700), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+    draw.rectangle([40, 50, 760, 620], fill=(90, 150, 215), outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([70, 80, 450, 150], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((88, 100), "A long spoken sentence that extends panel duration past default!", fill=(20, 20, 20))
+    page_file = tmp_path / "cp2_page.png"
+    page_img.save(page_file)
+
+    cfg = load_config("t0", config_dir=ROOT / "configs")
+    cfg.composition.resolution = [180, 320]
+    cfg.composition.fps = 8
+    run_dir = tmp_path / "run_cp2"
+
+    state = RunState(
+        config=RunConfig(source_pages=[str(page_file)], source_language="en", compute_tier="t0", output_resolution=[180, 320])
+    )
+    graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=False)
+    state = graph.run(state)
+    assert state.current_stage == PipelineStage.CHECKPOINT_1
+
+    # Resume from CP1 -> runs CLEAN_PLATES, ROUTE, TTS and pauses at CHECKPOINT_2
+    state = graph.resume(state)
+    assert state.current_stage == PipelineStage.CHECKPOINT_2
+    tts_dur = state.panels[0].duration_s
+    assert tts_dur > 2.5
+
+    # Verify routes/routing_plan.json has the updated TTS duration and edit route to parallax at CP2
+    plan_file = run_dir / "routes" / "routing_plan.json"
+    plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
+    assert plan_data[0]["duration_s"] == tts_dur
+    plan_data[0]["route"] = "parallax"
+    plan_file.write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
+
+    state = graph.resume(state)
+    assert state.current_stage == PipelineStage.DONE
+    assert state.panels[0].duration_s == tts_dur
+    assert state.panels[0].route == "parallax"
+
+
+def test_phase2_top_right_character_upward_tail_and_magiv3_bbox(tmp_path: Path):
+    """Verifies P2-04 (top-right character not blinded), P2-08 (upward pointer tail), and P2-06 (Magiv3 tight character BBox)."""
+    from m2a.providers import get_perception_provider
+
+    img = Image.new("RGB", (720, 560), (115, 165, 215))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 360, 720, 560], fill=(65, 120, 65))
+    draw.rectangle([0, 0, 719, 559], outline=(20, 20, 24), width=4)
+
+    # Character 1 on left (x=90..210, y=180..420)
+    draw.polygon([(150, 180), (90, 420), (210, 420)], fill=(220, 60, 55))
+    draw.ellipse([125, 130, 175, 180], fill=(255, 220, 190))
+
+    # Character 2 perched high in the top-right quadrant (x=530..650, y=70..270 — inside x>0.70*w, y<0.32*h!)
+    draw.polygon([(590, 100), (530, 270), (650, 270)], fill=(50, 95, 230))
+    draw.ellipse([568, 60, 612, 104], fill=(255, 220, 190))
+
+    # Speech bubble below Character 2 with an UPWARD-pointing tail toward Character 2
+    draw.rounded_rectangle([430, 310, 690, 375], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.polygon([(575, 310), (595, 310), (588, 285)], fill=(255, 255, 255), outline=(40, 40, 45))
+    draw.text((448, 330), "Upward tail to cliff scout!", fill=(20, 20, 20))
+
+    panel_path = tmp_path / "top_right_and_up_tail.png"
+    img.save(panel_path)
+
+    bubbles = detect_speech_bubbles_and_text(img)
+    assert len(bubbles) == 1
+    assert bubbles[0]["tail_tip"] is not None
+    # Upward tail tip y-coordinate must be above the main bubble body top (y < 310)
+    assert bubbles[0]["tail_tip"][1] < bubbles[0]["bbox"]["y"]
+
+    # Magiv3Provider must return 2 distinct tight character BBoxes and link the bubble to the right character
+    perc = get_perception_provider("magiv3")
+    txt_dets = perc.detect_text(panel_path)
+    char_dets = perc.detect_characters(panel_path, [])
+    assert len(char_dets) == 2
+    assert char_dets[0].bbox.x1 != char_dets[1].bbox.x1
+    links = perc.link_speakers(panel_path, txt_dets, char_dets)
+    assert len(links) == 1
+    assert links[0].character_bbox == char_dets[1].bbox
+
+
+def test_phase2_qc_last_frame_text_leakage_detection(tmp_path: Path):
+    """Verifies P2-09: compute_clip_qc_metrics catches a leaked speech bubble appearing in the last frame."""
+    clean_img = Image.new("RGB", (360, 640), (85, 145, 210))
+    draw_clean = ImageDraw.Draw(clean_img)
+    draw_clean.rectangle([0, 380, 360, 640], fill=(60, 115, 65))
+    draw_clean.polygon([(180, 200), (120, 420), (240, 420)], fill=(215, 65, 55))
+    clean_path = tmp_path / "clean_plate.png"
+    clean_img.save(clean_path)
+
+    leaked_last = clean_img.copy()
+    draw_leak = ImageDraw.Draw(leaked_last)
+    draw_leak.rounded_rectangle([40, 50, 310, 120], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw_leak.text((58, 70), "Late leaked bubble!", fill=(20, 20, 20))
+
+    # First 7 frames are clean, but last frame has a leaked speech bubble
+    frames = [clean_img.copy() for _ in range(7)] + [leaked_last]
+    qc_res = compute_clip_qc_metrics(clean_path, frames)
+    assert qc_res["new_text_count"] >= 1
+    assert qc_res["overall_pass"] is False
+
+
+

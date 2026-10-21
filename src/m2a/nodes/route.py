@@ -41,15 +41,7 @@ def route(state: RunState, config: PipelineConfig) -> RunState:
             else:
                 panel.route = "kenburns"
 
-            routing_plan.append(
-                {
-                    "panel_id": panel.panel_id,
-                    "shot": panel.shot,
-                    "motion_intensity": panel.motion_intensity,
-                    "route": panel.route,
-                    "motion_prompt": panel.motion_prompt,
-                }
-            )
+            routing_plan.append(panel.model_dump())
 
         plan_file = routes_dir / "routing_plan.json"
         plan_file.write_text(json.dumps(routing_plan, indent=2), encoding="utf-8")

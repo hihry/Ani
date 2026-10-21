@@ -173,6 +173,10 @@ func UnderstandNode(ctx context.Context, state *model.RunState, cfg *config.Pipe
 	if err := os.MkdirAll(vlmDir, 0755); err != nil {
 		return fmt.Errorf("create understanding dir %q: %w", vlmDir, err)
 	}
+	cropsDir := filepath.Join(vlmDir, "crops")
+	if err := os.MkdirAll(cropsDir, 0755); err != nil {
+		return fmt.Errorf("create crops dir %q: %w", cropsDir, err)
+	}
 
 	if state.CharacterBible == nil {
 		state.CharacterBible = model.NewCharacterBible()
@@ -196,12 +200,13 @@ func UnderstandNode(ctx context.Context, state *model.RunState, cfg *config.Pipe
 			results[i] = understandItem{err: fmt.Errorf("understand: panel image %q not found", cropPath)}
 			continue
 		}
+		annotatedPath := filepath.Join(vlmDir, p.PanelID+"_annotated.png")
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			res, err := wc.Understand(ctx, cropPath, p.PanelID, state.Config.SourceLanguage, i+1)
+			res, err := wc.Understand(ctx, cropPath, p.PanelID, state.Config.SourceLanguage, i+1, cropsDir, annotatedPath)
 			results[i] = understandItem{res: res, cropPath: cropPath, err: err}
 		}()
 	}
@@ -232,12 +237,16 @@ func UnderstandNode(ctx context.Context, state *model.RunState, cfg *config.Pipe
 			p.Characters = res.Characters
 
 			for _, c := range p.Characters {
+				refCrop := filepath.ToSlash(item.cropPath)
+				if c.CropPath != "" {
+					refCrop = filepath.ToSlash(c.CropPath)
+				}
 				entry, exists := state.CharacterBible.Characters[c.ID]
 				if !exists {
 					state.CharacterBible.Characters[c.ID] = model.CharacterEntry{
 						Name:           c.Name,
 						Description:    fmt.Sprintf("Character %s (%s)", c.Name, c.Pose),
-						ReferenceCrops: []string{filepath.ToSlash(item.cropPath)},
+						ReferenceCrops: []string{refCrop},
 						Voice: model.VoiceProfile{
 							VoiceID: "voice_" + c.ID,
 							Style:   c.Emotion,
@@ -245,7 +254,12 @@ func UnderstandNode(ctx context.Context, state *model.RunState, cfg *config.Pipe
 						Appearances: []string{p.PanelID},
 					}
 				} else {
-					entry.Appearances = append(entry.Appearances, p.PanelID)
+					if !containsStr(entry.Appearances, p.PanelID) {
+						entry.Appearances = append(entry.Appearances, p.PanelID)
+					}
+					if !containsStr(entry.ReferenceCrops, refCrop) {
+						entry.ReferenceCrops = append(entry.ReferenceCrops, refCrop)
+					}
 					state.CharacterBible.Characters[c.ID] = entry
 				}
 			}
@@ -571,8 +585,15 @@ func TTSNode(ctx context.Context, state *model.RunState, cfg *config.PipelineCon
 		p := &state.Panels[i]
 		panelSpeechDur := 0.0
 		for dIdx, d := range p.Dialogue {
-			audioPath := filepath.Join(audioDir, fmt.Sprintf("%s_%02d_%s.wav", p.PanelID, dIdx+1, d.SpeakerID))
-			res, err := wc.SynthesizeTTS(ctx, d.Text, audioPath, d.SpeakerID, d.Emotion, d.Lang)
+			safeSpk := sanitizeFilenameToken(d.SpeakerID)
+			voiceID := d.SpeakerID
+			if state.CharacterBible != nil {
+				if entry, ok := state.CharacterBible.Characters[d.SpeakerID]; ok && entry.Voice.VoiceID != "" {
+					voiceID = entry.Voice.VoiceID
+				}
+			}
+			audioPath := filepath.Join(audioDir, fmt.Sprintf("%s_%02d_%s.wav", p.PanelID, dIdx+1, safeSpk))
+			res, err := wc.SynthesizeTTS(ctx, d.Text, audioPath, voiceID, d.Emotion, d.Lang)
 			if err != nil {
 				return fmt.Errorf("tts %s line %d: %w", p.PanelID, dIdx+1, err)
 			}
@@ -591,6 +612,13 @@ func TTSNode(ctx context.Context, state *model.RunState, cfg *config.PipelineCon
 		}
 		if panelSpeechDur > 0 {
 			p.DurationS = model.ClampDuration(math.Round(math.Max(p.DurationS, panelSpeechDur+0.3)*100) / 100)
+		}
+	}
+
+	routesDir := filepath.Join(runDir, "routes")
+	if err := os.MkdirAll(routesDir, 0755); err == nil {
+		if planBytes, err := json.MarshalIndent(state.Panels, "", "  "); err == nil {
+			_ = os.WriteFile(filepath.Join(routesDir, "routing_plan.json"), planBytes, 0644)
 		}
 	}
 
@@ -653,6 +681,31 @@ func resolveRunDir(state *model.RunState, cfg *config.PipelineConfig) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
+}
+
+func containsStr(slice []string, target string) bool {
+	for _, s := range slice {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeFilenameToken(raw string) string {
+	var b []byte
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			b = append(b, c)
+		} else {
+			b = append(b, '_')
+		}
+	}
+	if len(b) == 0 {
+		return "speaker"
+	}
+	return string(b)
 }
 
 func copyFile(src, dst string) error {

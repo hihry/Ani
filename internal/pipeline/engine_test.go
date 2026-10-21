@@ -2,6 +2,7 @@ package pipeline_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -311,5 +312,149 @@ func TestQC_NoDuplicateKenBurnsReRender(t *testing.T) {
 	}
 	if cands[0].QC.OverallPass {
 		t.Errorf("expected OverallPass to remain false on sub-threshold candidate")
+	}
+}
+
+// TestCheckpoint1HumanEditSyncOnResume verifies Phase 2 CP1: human edits to understanding/<panel_id>.json are loaded into state on Resume.
+func TestCheckpoint1HumanEditSyncOnResume(t *testing.T) {
+	runDir := t.TempDir()
+	logger := discardLogger()
+	cfg := testConfig()
+	cfg.General.RunDir = runDir
+
+	state := model.NewRunState([]string{"p1.png"}, "en", "t1")
+	engine := pipeline.NewEngine(runDir, logger)
+	registerMockNodes(engine, runDir)
+
+	if err := engine.Run(context.Background(), state, cfg); err != nil {
+		t.Fatalf("engine.Run to CP1 failed: %v", err)
+	}
+	if state.CurrentStage != model.StageCheckpoint1 {
+		t.Fatalf("expected CHECKPOINT_1, got %s", state.CurrentStage)
+	}
+
+	// Simulate human reviewer editing understanding/panel_001.json while paused at CP1
+	editedPanel := state.Panels[0]
+	editedPanel.Dialogue = []model.DialogueLine{{
+		SpeakerID:  "char_jin",
+		Text:       "Edited at CP1 in Go!",
+		Lang:       "en",
+		Emotion:    "confident",
+		Confidence: 1.0,
+	}}
+	panelBytes, _ := json.MarshalIndent(editedPanel, "", "  ")
+	vlmDir := filepath.Join(runDir, "understanding")
+	_ = os.MkdirAll(vlmDir, 0755)
+	if err := os.WriteFile(filepath.Join(vlmDir, "panel_001.json"), panelBytes, 0644); err != nil {
+		t.Fatalf("write panel_001.json failed: %v", err)
+	}
+
+	if err := engine.Resume(context.Background(), state, cfg); err != nil {
+		t.Fatalf("engine.Resume from CP1 failed: %v", err)
+	}
+	if len(state.Panels[0].Dialogue) != 1 || state.Panels[0].Dialogue[0].Text != "Edited at CP1 in Go!" {
+		t.Fatalf("expected CP1 human edit to sync into state.Panels[0], got %+v", state.Panels[0].Dialogue)
+	}
+}
+
+// TestAdversarial_CP1CorruptAndOutOfBoundsEdits verifies that Resume from CP1 clamps out-of-range duration_s/motion_intensity
+// and gracefully survives corrupted JSON in understanding/panel_002.json without losing panel_002.
+func TestAdversarial_CP1CorruptAndOutOfBoundsEdits(t *testing.T) {
+	runDir := t.TempDir()
+	logger := discardLogger()
+	cfg := testConfig()
+	cfg.General.RunDir = runDir
+
+	state := model.NewRunState([]string{"p1.png"}, "en", "t1")
+	engine := pipeline.NewEngine(runDir, logger)
+	registerMockNodes(engine, runDir)
+
+	if err := engine.Run(context.Background(), state, cfg); err != nil {
+		t.Fatalf("engine.Run to CP1 failed: %v", err)
+	}
+
+	vlmDir := filepath.Join(runDir, "understanding")
+	_ = os.MkdirAll(vlmDir, 0755)
+
+	// Panel 1: Out-of-bounds DurationS (88.0) and MotionIntensity (9.5) + unsafe SpeakerID with slashes
+	editedP1 := state.Panels[0]
+	editedP1.DurationS = 88.0
+	editedP1.MotionIntensity = 9.5
+	editedP1.Dialogue = []model.DialogueLine{{
+		SpeakerID:  "Jin / Shadow:King..!",
+		Text:       "Clamped and sanitized!",
+		Lang:       "en",
+		Emotion:    "fierce",
+		Confidence: 0.99,
+	}}
+	p1Bytes, _ := json.MarshalIndent(editedP1, "", "  ")
+	_ = os.WriteFile(filepath.Join(vlmDir, "panel_001.json"), p1Bytes, 0644)
+
+	// Panel 2: Corrupted JSON file on disk
+	_ = os.WriteFile(filepath.Join(vlmDir, "panel_002.json"), []byte("{corrupt_json_payload"), 0644)
+
+	if err := engine.Resume(context.Background(), state, cfg); err != nil {
+		t.Fatalf("engine.Resume from CP1 failed on adversarial edits: %v", err)
+	}
+
+	if state.Panels[0].DurationS != 10.0 {
+		t.Fatalf("expected DurationS clamped to 10.0, got %.2f", state.Panels[0].DurationS)
+	}
+	if state.Panels[0].MotionIntensity != 1.0 {
+		t.Fatalf("expected MotionIntensity clamped to 1.0, got %.2f", state.Panels[0].MotionIntensity)
+	}
+	if state.Panels[1].PanelID != "panel_002" {
+		t.Fatalf("expected panel_002 preserved after corrupt JSON skip, got %q", state.Panels[1].PanelID)
+	}
+}
+
+// TestCheckpoint2PreservesTTSDurationOnResume verifies P2-02: resuming from CHECKPOINT_2 does not clobber
+// TTS-synchronized panel durations with pre-TTS 2.5s durations from RouteNode.
+func TestCheckpoint2PreservesTTSDurationOnResume(t *testing.T) {
+	runDir := t.TempDir()
+	logger := discardLogger()
+	cfg := testConfig()
+	cfg.General.RunDir = runDir
+
+	state := model.NewRunState([]string{"p1.png"}, "en", "t1")
+	engine := pipeline.NewEngine(runDir, logger)
+	registerMockNodes(engine, runDir)
+
+	// Override Route to write 2.5s to routes/routing_plan.json (like RouteNode)
+	engine.RegisterNode(model.StageRoute, func(ctx context.Context, s *model.RunState, c *config.PipelineConfig) error {
+		routesDir := filepath.Join(runDir, "routes")
+		_ = os.MkdirAll(routesDir, 0755)
+		for i := range s.Panels {
+			s.Panels[i].DurationS = 2.5
+			s.Panels[i].Route = model.RouteKenBurns
+		}
+		b, _ := json.MarshalIndent(s.Panels, "", "  ")
+		return os.WriteFile(filepath.Join(routesDir, "routing_plan.json"), b, 0644)
+	})
+
+	// Override TTS to extend DurationS to 6.4s and update routes/routing_plan.json (like fixed TTSNode)
+	engine.RegisterNode(model.StageTTS, func(ctx context.Context, s *model.RunState, c *config.PipelineConfig) error {
+		routesDir := filepath.Join(runDir, "routes")
+		_ = os.MkdirAll(routesDir, 0755)
+		s.Panels[0].DurationS = 6.4
+		b, _ := json.MarshalIndent(s.Panels, "", "  ")
+		return os.WriteFile(filepath.Join(routesDir, "routing_plan.json"), b, 0644)
+	})
+
+	_ = engine.Run(context.Background(), state, cfg)    // pauses at CP1
+	_ = engine.Resume(context.Background(), state, cfg) // runs CLEAN_PLATES, ROUTE, TTS -> pauses at CP2
+	if state.CurrentStage != model.StageCheckpoint2 {
+		t.Fatalf("expected CHECKPOINT_2, got %s", state.CurrentStage)
+	}
+	if state.Panels[0].DurationS != 6.4 {
+		t.Fatalf("expected DurationS=6.4 at CP2, got %.2f", state.Panels[0].DurationS)
+	}
+
+	// Resume from CP2 -> GENERATE -> QC -> ASSEMBLE -> DONE
+	if err := engine.Resume(context.Background(), state, cfg); err != nil {
+		t.Fatalf("Resume from CP2 failed: %v", err)
+	}
+	if state.Panels[0].DurationS != 6.4 {
+		t.Fatalf("expected DurationS=6.4 preserved after CP2 resume, got %.2f", state.Panels[0].DurationS)
 	}
 }

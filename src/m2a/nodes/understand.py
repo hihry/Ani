@@ -30,7 +30,9 @@ def understand(state: RunState, config: PipelineConfig) -> RunState:
     try:
         run_dir = Path(config.general.run_dir)
         vlm_dir = run_dir / "understanding"
+        crops_dir = vlm_dir / "crops"
         vlm_dir.mkdir(parents=True, exist_ok=True)
+        crops_dir.mkdir(parents=True, exist_ok=True)
 
         if state.character_bible is None:
             state.character_bible = CharacterBible()
@@ -43,6 +45,8 @@ def understand(state: RunState, config: PipelineConfig) -> RunState:
                     panel_id=panel.panel_id,
                     language=state.config.source_language,
                     reading_order=idx,
+                    crops_dir=crops_dir,
+                    annotated_path=vlm_dir / f"{panel.panel_id}_annotated.png",
                 )
                 shot_val = sem.get("shot", panel.shot)
                 if shot_val in ("close_up", "medium", "wide", "splash"):
@@ -76,21 +80,27 @@ def understand(state: RunState, config: PipelineConfig) -> RunState:
                         name=c["name"],
                         emotion=c.get("emotion", "neutral"),
                         pose=c.get("pose", "standing"),
+                        crop_path=c.get("crop_path"),
                     )
                     for c in sem.get("characters", [])
                 ]
 
                 for c in panel.characters:
+                    ref_crop = c.crop_path or str(crop_path.as_posix())
                     if c.id not in state.character_bible.characters:
                         state.character_bible.characters[c.id] = CharacterEntry(
                             name=c.name,
-                            description=f"Character {c.name}",
-                            reference_crops=[str(crop_path.as_posix())],
+                            description=f"Character {c.name} ({c.pose})",
+                            reference_crops=[ref_crop],
                             voice=VoiceProfile(voice_id=f"voice_{c.id}", style=c.emotion),
                             appearances=[panel.panel_id],
                         )
-                    elif panel.panel_id not in state.character_bible.characters[c.id].appearances:
-                        state.character_bible.characters[c.id].appearances.append(panel.panel_id)
+                    else:
+                        entry = state.character_bible.characters[c.id]
+                        if panel.panel_id not in entry.appearances:
+                            entry.appearances.append(panel.panel_id)
+                        if ref_crop not in entry.reference_crops:
+                            entry.reference_crops.append(ref_crop)
 
             panel_json_file = vlm_dir / f"{panel.panel_id}.json"
             panel_json_file.write_text(panel.model_dump_json(indent=2), encoding="utf-8")

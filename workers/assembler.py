@@ -27,6 +27,11 @@ try:
 except ImportError:
     cv2 = None
 
+try:
+    from workers.understanding import count_residual_text_bubbles, detect_speech_bubbles_and_text
+except ImportError:
+    from understanding import count_residual_text_bubbles, detect_speech_bubbles_and_text
+
 logger = logging.getLogger("m2a.assembler")
 
 _FONT_CANDIDATES = [
@@ -102,6 +107,17 @@ def compute_clip_qc_metrics(
     v_first = _hist_vec(first_frame)
     v_last = _hist_vec(last_frame)
     sim_src = 0.5 * (float(np.dot(v_src, v_first)) + float(np.dot(v_src, v_last)))
+    src_ref = src_img
+    if src_img.size != first_frame.size:
+        try:
+            from workers.render_kenburns import prepare_cinematic_canvas
+        except ImportError:
+            from render_kenburns import prepare_cinematic_canvas
+        src_ref = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.0)
+        if src_img.width * first_frame.height > first_frame.width * src_img.height:
+            v_src_canvas = _hist_vec(src_ref)
+            sim_canvas = 0.5 * (float(np.dot(v_src_canvas, v_first)) + float(np.dot(v_src_canvas, v_last)))
+            sim_src = max(sim_src, sim_canvas)
     sim_temporal = float(np.dot(v_first, v_last))
     identity_similarity = round(max(0.0, min(1.0, 0.5 * sim_src + 0.5 * sim_temporal)), 4)
 
@@ -120,14 +136,21 @@ def compute_clip_qc_metrics(
         flicker_score = 0.0
         motion_score = 0.0
 
+    # 3. Text Leakage QC (Phase 2 -> Phase 5 connection):
+    # Count any newly introduced / uncleaned text bubbles in rendered frames relative to the input plate
+    src_bubbles = min(count_residual_text_bubbles(src_img), count_residual_text_bubbles(src_ref))
+    frame_bubbles = max(count_residual_text_bubbles(first_frame), count_residual_text_bubbles(last_frame))
+    new_text_count = max(0, int(frame_bubbles - src_bubbles))
+
     overall_pass = (
         identity_similarity >= 0.85
         and flicker_score <= 0.15
         and 0.01 <= motion_score <= 0.98
+        and new_text_count == 0
     )
     return {
         "identity_similarity": identity_similarity,
-        "new_text_count": 0,
+        "new_text_count": new_text_count,
         "flicker_score": flicker_score,
         "motion_score": motion_score,
         "overall_pass": bool(overall_pass),
@@ -138,57 +161,107 @@ def inpaint_panel_bubbles(
     image_path: Path,
     output_path: Path,
     bubble_bboxes: Optional[List[Dict[str, int]]] = None,
+    mask_path: Optional[Path] = None,
+    mask_output_path: Optional[Path] = None,
+    img: Optional[Image.Image] = None,
 ) -> Path:
-    """Removes speech bubbles and lettering from a panel image to produce a clean plate."""
-    img_pil = Image.open(image_path).convert("RGB")
+    """Removes speech bubbles, borders, pointer tails, and lettering from a panel image to produce a clean plate."""
+    img_pil = img.convert("RGB") if img is not None else Image.open(image_path).convert("RGB")
     arr = np.array(img_pil, dtype=np.uint8)
     h, w, _ = arr.shape
     mask = np.zeros((h, w), dtype=np.uint8)
 
-    # 1. Mask explicit dialogue / SFX bounding boxes when provided
+    # 1. Load explicit binary mask if provided
+    if mask_path is not None and Path(mask_path).is_file():
+        m_img = Image.open(mask_path).convert("L").resize((w, h), Image.Resampling.NEAREST)
+        mask = (np.asarray(m_img, dtype=np.uint8) > 127).astype(np.uint8) * 255
+
+    # 2. Mask explicit dialogue / SFX bounding boxes (expanding downward to cover pointer tails & dark outlines)
     if bubble_bboxes:
         for b in bubble_bboxes:
-            bx = max(0, int(b.get("x", 0)) - 6)
-            by = max(0, int(b.get("y", 0)) - 6)
-            bw = int(b.get("w", 0)) + 12
-            bh = int(b.get("h", 0)) + 12
-            if bw > 12 and bh > 12:
+            bx = max(0, int(b.get("x", 0)) - 8)
+            by = max(0, int(b.get("y", 0)) - 8)
+            bw = int(b.get("w", 0)) + 16
+            bh = int(b.get("h", 0)) + 28  # +20px below bbox bottom to capture speech-bubble pointer tail
+            if bw > 16 and bh > 16:
                 mask[by : min(h, by + bh), bx : min(w, bx + bw)] = 255
-    elif cv2 is not None:
-        # 2. Fallback heuristic only when no explicit bboxes exist, requiring dark text strokes inside bright region
-        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-        _, bright = cv2.threshold(gray, 244, 255, cv2.THRESH_BINARY)
-        border = 8
-        if h > 2 * border and w > 2 * border:
-            interior = np.zeros_like(bright)
-            interior[border : h - border, border : w - border] = bright[border : h - border, border : w - border]
-            contours, _ = cv2.findContours(interior, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            panel_area = float(w * h)
-            for cnt in contours:
-                rx, ry, rw, rh = cv2.boundingRect(cnt)
-                area = float(rw * rh)
-                if 0.015 * panel_area <= area <= 0.30 * panel_area and rw >= 60 and rh >= 30:
-                    roi = gray[ry : ry + rh, rx : rx + rw]
-                    dark_ratio = float((roi < 80).mean())
-                    if 0.02 <= dark_ratio <= 0.35:
-                        pad = 6
-                        mask[
-                            max(0, ry - pad) : min(h, ry + rh + pad),
-                            max(0, rx - pad) : min(w, rx + rw + pad),
-                        ] = 255
+
+    # 3. Always union with Phase 2 morphological bubble detector envelope when no precomputed mask_path was given
+    if mask_path is None:
+        detected = detect_speech_bubbles_and_text(img_pil)
+        for reg in detected:
+            eb = reg.get("envelope_bbox") or reg["bbox"]
+            ex = max(0, int(eb["x"]) - 4)
+            ey = max(0, int(eb["y"]) - 4)
+            ew = int(eb["w"]) + 8
+            eh = int(eb["h"]) + 8
+            mask[ey : min(h, ey + eh), ex : min(w, ex + ew)] = 255
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if cv2 is not None and np.any(mask > 0):
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         mask = cv2.dilate(mask, kernel, iterations=1)
-        bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-        inpainted_bgr = cv2.inpaint(bgr, mask, 5, cv2.INPAINT_TELEA)
-        clean_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+
+        # Pre-fill masked spans using vectorized 2D boundary interpolation so large or edge-touching bubbles leave zero white haze
+        clean_arr = arr.copy()
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        frame_pad = min(6, max(2, min(w, h) // 40))
+        for lbl in range(1, num_labels):
+            rx = int(stats[lbl, cv2.CC_STAT_LEFT])
+            ry = int(stats[lbl, cv2.CC_STAT_TOP])
+            rw = int(stats[lbl, cv2.CC_STAT_WIDTH])
+            rh = int(stats[lbl, cv2.CC_STAT_HEIGHT])
+            ry2 = min(h, ry + rh)
+            rx2 = min(w, rx + rw)
+            ny = ry2 - ry
+            nx = rx2 - rx
+            if ny <= 0 or nx <= 0:
+                continue
+
+            has_left = (rx - 4) >= frame_pad
+            has_right = (rx + rw + 3) < (w - frame_pad)
+            lx = max(frame_pad, rx - 4)
+            tx = min(w - frame_pad - 1, rx + rw + 3)
+            top_y = max(frame_pad, ry - 4)
+            bot_y = min(h - frame_pad - 1, ry + rh + 3)
+
+            comp_mask_2d = labels[ry:ry2, rx:rx2] == lbl
+            if has_left or has_right:
+                left_col = clean_arr[ry:ry2, lx if has_left else tx, :].astype(np.float32)[:, None, :]
+                right_col = clean_arr[ry:ry2, tx if has_right else lx, :].astype(np.float32)[:, None, :]
+                alphas_x = np.linspace(0.0, 1.0, nx, dtype=np.float32)[None, :, None]
+                block = np.clip((1.0 - alphas_x) * left_col + alphas_x * right_col, 0.0, 255.0).astype(np.uint8)
+            else:
+                top_row = clean_arr[top_y, rx:rx2, :].astype(np.float32)[None, :, :]
+                bot_row = clean_arr[bot_y, rx:rx2, :].astype(np.float32)[None, :, :]
+                alphas_y = np.linspace(0.0, 1.0, ny, dtype=np.float32)[:, None, None]
+                block = np.clip((1.0 - alphas_y) * top_row + alphas_y * bot_row, 0.0, 255.0).astype(np.uint8)
+
+            sub_view = clean_arr[ry:ry2, rx:rx2]
+            sub_view[comp_mask_2d] = block[comp_mask_2d]
+
+        # Smooth boundary transition ring via Telea inpainting
+        eroded = cv2.erode(mask, kernel, iterations=1)
+        boundary_ring = cv2.subtract(mask, eroded)
+        if np.any(boundary_ring > 0):
+            bgr = cv2.cvtColor(clean_arr, cv2.COLOR_RGB2BGR)
+            inpainted_bgr = cv2.inpaint(bgr, boundary_ring, 5, cv2.INPAINT_TELEA)
+            clean_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+        else:
+            clean_rgb = clean_arr
         out_img = Image.fromarray(clean_rgb)
     else:
         out_img = img_pil
 
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Persist binary inpaint mask artifact alongside clean plate when requested or following *_clean.png convention
+    resolved_mask_out = mask_output_path
+    if resolved_mask_out is None and output_path.name.endswith("_clean.png"):
+        resolved_mask_out = output_path.with_name(output_path.name[:-10] + "_mask.png")
+    if resolved_mask_out is not None:
+        Image.fromarray(mask, mode="L").save(Path(resolved_mask_out), format="PNG", compress_level=1)
+
     out_img.save(output_path, format="PNG", compress_level=1)
     logger.info(f"Created clean plate: {output_path}")
     return output_path

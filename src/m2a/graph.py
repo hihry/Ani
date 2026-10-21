@@ -1,6 +1,7 @@
 """State machine for the Manhwa-to-Anime pipeline (interoperable with Go Engine)."""
 from __future__ import annotations
 
+import json
 import logging
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from m2a.nodes import (
     tts_node,
     understand,
 )
-from m2a.state import PipelineStage, RunState
+from m2a.state import CharacterBible, PanelJSON, PipelineStage, RunState
 
 logger = logging.getLogger(__name__)
 
@@ -129,10 +130,59 @@ class PipelineGraph:
             state.advance_to(retry_stage)
             self._save_checkpoint(state)
         elif state.current_stage in (PipelineStage.CHECKPOINT_1, PipelineStage.CHECKPOINT_2):
+            if state.current_stage == PipelineStage.CHECKPOINT_1:
+                self._sync_checkpoint_1_edits(state)
+            elif state.current_stage == PipelineStage.CHECKPOINT_2:
+                self._sync_checkpoint_2_edits(state)
             next_st = self.transitions[state.current_stage]
             state.advance_to(next_st)
             self._save_checkpoint(state)
         return self._loop(state)
+
+    def _sync_checkpoint_1_edits(self, state: RunState) -> None:
+        """Synchronizes any human edits made to understanding/<panel_id>.json or character_bible.json at CP1."""
+        vlm_dir = self.run_dir / "understanding"
+        if not vlm_dir.is_dir():
+            return
+        for i, p in enumerate(state.panels):
+            panel_file = vlm_dir / f"{p.panel_id}.json"
+            if panel_file.is_file():
+                try:
+                    raw_obj = json.loads(panel_file.read_text(encoding="utf-8"))
+                    if isinstance(raw_obj, dict):
+                        if "duration_s" in raw_obj:
+                            raw_obj["duration_s"] = max(0.5, min(10.0, float(raw_obj["duration_s"])))
+                        if "motion_intensity" in raw_obj:
+                            raw_obj["motion_intensity"] = max(0.0, min(1.0, float(raw_obj["motion_intensity"])))
+                    state.panels[i] = PanelJSON.model_validate(raw_obj)
+                except Exception as e:
+                    logger.warning(f"Skipping invalid CP1 edit in {panel_file}: {e}")
+        bible_file = vlm_dir / "character_bible.json"
+        if bible_file.is_file():
+            try:
+                state.character_bible = CharacterBible.model_validate_json(bible_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                logger.warning(f"Skipping invalid CP1 edit in {bible_file}: {e}")
+
+    def _sync_checkpoint_2_edits(self, state: RunState) -> None:
+        """Synchronizes any human edits made to routes/routing_plan.json at CP2."""
+        plan_file = self.run_dir / "routes" / "routing_plan.json"
+        if not plan_file.is_file():
+            return
+        try:
+            raw_list = json.loads(plan_file.read_text(encoding="utf-8"))
+            if isinstance(raw_list, list) and len(raw_list) == len(state.panels):
+                for i, raw_obj in enumerate(raw_list):
+                    if isinstance(raw_obj, dict):
+                        if "duration_s" in raw_obj:
+                            raw_obj["duration_s"] = max(0.5, min(10.0, float(raw_obj["duration_s"])))
+                        if "motion_intensity" in raw_obj:
+                            raw_obj["motion_intensity"] = max(0.0, min(1.0, float(raw_obj["motion_intensity"])))
+                        merged = state.panels[i].model_dump()
+                        merged.update(raw_obj)
+                        state.panels[i] = PanelJSON.model_validate(merged)
+        except Exception as e:
+            logger.warning(f"Skipping invalid CP2 edit in {plan_file}: {e}")
 
     def _loop(self, state: RunState) -> RunState:
         while state.current_stage not in (PipelineStage.DONE, PipelineStage.FAILED):
