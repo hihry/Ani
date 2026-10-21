@@ -7,7 +7,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 COMFY_DIR="${COMFY_DIR:-$HOME/ComfyUI}"
 MANIFEST_PATH="${REPO_ROOT}/workflows/comfyui/manifest.yaml"
 COMFY_COMMIT="7a28332047b6af638dc6c7f72ef3481a718769fd"
-TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+
+# Prevent uv from timing out or saturating bandwidth on large CUDA wheels
+export UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-600}"
+export UV_CONCURRENT_DOWNLOADS="${UV_CONCURRENT_DOWNLOADS:-4}"
+export UV_HTTP_RETRIES="${UV_HTTP_RETRIES:-5}"
 
 # Default model storage on the high-capacity partition when /run/media/hihry/OS is present
 if [ -z "${M2A_MODELS_DIR:-}" ]; then
@@ -76,8 +80,26 @@ pip_install() {
   fi
 }
 
-echo "[m2a-comfyui] Installing PyTorch (CUDA) from ${TORCH_INDEX_URL}..."
-pip_install torch torchvision torchaudio --index-url "${TORCH_INDEX_URL}"
+echo "[m2a-comfyui] Installing PyTorch (CUDA 12.4) from PyPI CDN..."
+pip_install "torch==2.6.0" "torchvision==0.21.0" "torchaudio==2.6.0"
+
+# Ensure torch._library.infer_schema supports Python 3.9+ built-in generic list[T] used by comfy_kitchen
+"${COMFY_DIR}/.venv/bin/python" - << 'PYEOF'
+import pathlib, torch
+p = pathlib.Path(torch.__file__).parent / "_library" / "infer_schema.py"
+if p.is_file():
+    txt = p.read_text(encoding="utf-8")
+    if "list[typ]" not in txt:
+        txt = txt.replace(
+            "typing.List[typ],  # type: ignore[valid-type]\n        ]",
+            "typing.List[typ],  # type: ignore[valid-type]\n            list[typ],  # type: ignore[valid-type]\n        ]",
+        )
+        txt = txt.replace(
+            'typing.List[Tensor]: "Tensor[]",',
+            'typing.List[Tensor]: "Tensor[]",\n    list[Tensor]: "Tensor[]",',
+        )
+        p.write_text(txt, encoding="utf-8")
+PYEOF
 
 echo "[m2a-comfyui] Installing ComfyUI requirements..."
 pip_install -r "${COMFY_DIR}/requirements.txt"
