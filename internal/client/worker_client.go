@@ -262,7 +262,7 @@ type UnderstandResult struct {
 }
 
 // Understand analyzes a panel image for scene semantics, dialogue, and characters.
-func (c *WorkerClient) Understand(ctx context.Context, panelImagePath string, panelID string, lang string, readingOrder int) (*UnderstandResult, error) {
+func (c *WorkerClient) Understand(ctx context.Context, panelImagePath string, panelID string, lang string, readingOrder int, opts ...string) (*UnderstandResult, error) {
 	var res UnderstandResult
 	payload := map[string]any{
 		"panel_image_path": panelImagePath,
@@ -276,6 +276,14 @@ func (c *WorkerClient) Understand(ctx context.Context, panelImagePath string, pa
 		"--panel-id", panelID,
 		"--lang", lang,
 		"--order", strconv.Itoa(readingOrder),
+	}
+	if len(opts) > 0 && opts[0] != "" {
+		payload["crops_dir"] = opts[0]
+		args = append(args, "--crops-dir", opts[0])
+	}
+	if len(opts) > 1 && opts[1] != "" {
+		payload["annotated_path"] = opts[1]
+		args = append(args, "--annotated", opts[1])
 	}
 	if err := c.call(ctx, "/understand", payload, args, &res); err != nil {
 		return nil, err

@@ -1,7 +1,9 @@
 """Text-to-Speech node for the Manhwa-to-Anime pipeline."""
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -30,7 +32,8 @@ def tts_node(state: RunState, config: PipelineConfig) -> RunState:
                 if state.character_bible and line.speaker_id in state.character_bible.characters:
                     voice_id = state.character_bible.characters[line.speaker_id].voice.voice_id
 
-                audio_path = audio_dir / f"{panel.panel_id}_{idx:02d}_{line.speaker_id}.wav"
+                safe_spk = re.sub(r"[^A-Za-z0-9_-]+", "_", line.speaker_id or "speaker").strip("_") or "speaker"
+                audio_path = audio_dir / f"{panel.panel_id}_{idx:02d}_{safe_spk}.wav"
                 dur = synthesize_speech_wav(
                     text=line.text,
                     output_path=audio_path,
@@ -53,6 +56,12 @@ def tts_node(state: RunState, config: PipelineConfig) -> RunState:
                 panel.duration_s = round(min(10.0, max(panel.duration_s, panel_audio_dur + 0.3)), 2)
 
         state.audio_tracks = tracks
+        routes_dir = run_dir / "routes"
+        routes_dir.mkdir(parents=True, exist_ok=True)
+        (routes_dir / "routing_plan.json").write_text(
+            json.dumps([p.model_dump() for p in state.panels], indent=2),
+            encoding="utf-8",
+        )
         state.cost_ledger.add_model_cost(config.audio.tts_primary, time.time() - start_time)
     except Exception as e:
         logger.exception("Error in tts node")

@@ -2,9 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/m2a/manhwa2anime/internal/config"
@@ -106,6 +109,7 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 	}
 
 	if state.CurrentStage == model.StageCheckpoint1 {
+		e.syncCheckpoint1Edits(state)
 		idx := e.indexOfStage(model.StageCheckpoint1)
 		if idx >= 0 && idx+1 < len(e.order) {
 			nextStage := e.order[idx+1]
@@ -119,6 +123,7 @@ func (e *Engine) Resume(ctx context.Context, state *model.RunState, cfg *config.
 	}
 
 	if state.CurrentStage == model.StageCheckpoint2 {
+		e.syncCheckpoint2Edits(state)
 		idx := e.indexOfStage(model.StageCheckpoint2)
 		if idx >= 0 && idx+1 < len(e.order) {
 			nextStage := e.order[idx+1]
@@ -280,4 +285,53 @@ func (e *Engine) indexOfStage(stage model.PipelineStage) int {
 		}
 	}
 	return -1
+}
+
+// syncCheckpoint1Edits reloads any human edits made to understanding/<panel_id>.json or character_bible.json before resuming CP1.
+func (e *Engine) syncCheckpoint1Edits(state *model.RunState) {
+	vlmDir := filepath.Join(e.runDir, "understanding")
+	for i := range state.Panels {
+		pFile := filepath.Join(vlmDir, state.Panels[i].PanelID+".json")
+		raw, err := os.ReadFile(pFile)
+		if err != nil {
+			continue
+		}
+		var edited model.PanelJSON
+		if err := json.Unmarshal(raw, &edited); err == nil {
+			edited.DurationS = model.ClampDuration(edited.DurationS)
+			if edited.MotionIntensity < 0.0 {
+				edited.MotionIntensity = 0.0
+			} else if edited.MotionIntensity > 1.0 {
+				edited.MotionIntensity = 1.0
+			}
+			if edited.Validate() == nil {
+				state.Panels[i] = edited
+			}
+		}
+	}
+	bibleFile := filepath.Join(vlmDir, "character_bible.json")
+	if raw, err := os.ReadFile(bibleFile); err == nil {
+		var editedBible model.CharacterBible
+		if err := json.Unmarshal(raw, &editedBible); err == nil && editedBible.Characters != nil {
+			state.CharacterBible = &editedBible
+		}
+	}
+}
+
+// syncCheckpoint2Edits reloads any human edits made to routes/routing_plan.json before resuming CP2.
+func (e *Engine) syncCheckpoint2Edits(state *model.RunState) {
+	planFile := filepath.Join(e.runDir, "routes", "routing_plan.json")
+	raw, err := os.ReadFile(planFile)
+	if err != nil {
+		return
+	}
+	var editedPanels []model.PanelJSON
+	if err := json.Unmarshal(raw, &editedPanels); err == nil && len(editedPanels) == len(state.Panels) {
+		for i := range editedPanels {
+			editedPanels[i].DurationS = model.ClampDuration(editedPanels[i].DurationS)
+			if editedPanels[i].Validate() == nil {
+				state.Panels[i] = editedPanels[i]
+			}
+		}
+	}
 }
