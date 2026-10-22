@@ -46,6 +46,7 @@ ALL_KNOWN_NODES = [
     "LoadImage",
     "CLIPTextEncode",
     "WanImageToVideo",
+    "Wan22ImageToVideoLatent",
     "LTXVImgToVideo",
     "HunyuanImageToVideo",
     "RandomNoise",

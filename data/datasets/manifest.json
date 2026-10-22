@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "total_genres": 18,
+  "demographics": [
+    "shonen",
+    "shojo",
+    "seinen",
+    "josei",
+    "kodomomuke"
+  ],
+  "core_genres": [
+    "action_adventure",
+    "comedy_slice_of_life",
+    "romance_drama",
+    "scifi_fantasy",
+    "horror_thriller",
+    "sports"
+  ],
+  "subgenres": [
+    "isekai",
+    "mecha",
+    "mahou_shoujo",
+    "idol_music",
+    "harem_reverse_harem",
+    "ecchi",
+    "yaoi_yuri"
+  ],
+  "panel_layout_topologies": [
+    "vertical_webtoon_scroll",
+    "diagonal_action_slash",
+    "full_bleed_splash",
+    "inset_reaction_overlay",
+    "split_screen_standoff",
+    "shojo_open_flower_borderless",
+    "claustrophobic_horror_grid",
+    "four_koma_gag_strip",
+    "mecha_hud_cockpit_inset",
+    "intimate_two_shot_close"
+  ],
+  "storytelling_arc_modes": [
+    "complete_4_act_arc",
+    "incomplete_missing_setup",
+    "incomplete_missing_climax",
+    "incomplete_cliffhanger_ending",
+    "fragmented_mid_battle",
+    "in_medias_res_opening",
+    "flashback_memory_montage",
+    "parallel_cross_cut"
+  ],
+  "verified_upstream_sources": {
+    "manga109_suite": {
+      "name": "Manga109 + Manga109Dialog + COO (Comic Onomatopoeia)",
+      "source_type": "academic_benchmark",
+      "url": "http://www.manga109.org/",
+      "paper": "Multimedia Tools and Applications (2017) / IEEE Access (2020) / arXiv:2312.16954",
+      "modalities": [
+        "panels",
+        "speech_bubbles",
+        "sfx_polygons",
+        "character_faces_bodies",
+        "speaker_attribution",
+        "demographics_shonen_shojo_seinen_josei"
+      ]
+    },
+    "popmanga_magi": {
+      "name": "PopManga (Magi / Magiv2 Benchmark)",
+      "source_type": "academic_cvpr2024",
+      "url": "https://github.com/ragavsachdeva/magi",
+      "paper": "CVPR 2024 (The Manga Whisperer)",
+      "modalities": [
+        "english_comics_panels",
+        "character_reid_clusters",
+        "speaker_to_text_linking",
+        "ocr_transcriptions"
+      ]
+    },
+    "toon2data_webtoon": {
+      "name": "Toon2Data + ogkalu/comic-speech-bubble-detector-yolov8m",
+      "source_type": "github_huggingface",
+      "url": "https://github.com/Snowad14/Toon2Data",
+      "hf_id": "ogkalu/comic-speech-bubble-detector-yolov8m",
+      "modalities": [
+        "vertical_webtoon_panels",
+        "speech_bubble_masks",
+        "clean_plate_inpainting"
+      ]
+    },
+    "sakuga_42m": {
+      "name": "Sakuga-42M + DSULT-Core/i-love-anime-sakuga",
+      "source_type": "academic_huggingface",
+      "url": "https://github.com/KytraScript/SakugaDataset",
+      "hf_id": "DSULT-Core/i-love-anime-sakuga",
+      "paper": "arXiv:2405.07425",
+      "modalities": [
+        "2d_anime_action_video_clips",
+        "sakuga_motion_primitives",
+        "video_text_captions"
+      ]
+    },
+    "animeshooter": {
+      "name": "AnimeShooter Multi-Shot Reference-Guided Dataset",
+      "source_type": "academic_huggingface",
+      "url": "https://github.com/qiulu66/Anime-Shooter",
+      "hf_id": "qiulu66/AnimeShooter",
+      "modalities": [
+        "multi_shot_story_arcs",
+        "character_reference_crops",
+        "paired_audio_tracks"
+      ]
+    },
+    "animerun_atd12k": {
+      "name": "AnimeRun (NeurIPS 2022) + ATD-12K (CVPR 2021)",
+      "source_type": "academic_benchmark",
+      "url": "https://github.com/siyao72/AnimeRun",
+      "paper": "NeurIPS 2022 / CVPR 2021",
+      "modalities": [
+        "2d_contour_line_art",
+        "ground_truth_optical_flow",
+        "occlusion_masks",
+        "frame_triplets"
+      ]
+    },
+    "zarxrax_anime_seg": {
+      "name": "Zarxrax/anime_image_segmentation + skytnt/anime-segmentation",
+      "source_type": "huggingface_dataset",
+      "hf_id": "Zarxrax/anime_image_segmentation",
+      "model_hf_id": "ZhengPeng7/BiRefNet_anime",
+      "modalities": [
+        "rgba_character_cutouts",
+        "clean_background_layers",
+        "alpha_matting_masks"
+      ]
+    },
+    "deepghs_anime_bg": {
+      "name": "deepghs/anime-bg + RicemanT/Anime-Background-Finetuning-Unprocessed",
+      "source_type": "huggingface_dataset",
+      "hf_id": "deepghs/anime-bg",
+      "secondary_hf_id": "RicemanT/Anime-Background-Finetuning-Unprocessed",
+      "modalities": [
+        "2d_anime_scenery_plates",
+        "lighting_time_of_day_tags",
+        "illustrious_xl_bg_lora"
+      ]
+    },
+    "mal_comics_narrative": {
+      "name": "fadhilakbar/anime-title-metadata-index + COMICS (Iyyer et al., CVPR 2017)",
+      "source_type": "huggingface_academic",
+      "hf_id": "fadhilakbar/anime-title-metadata-index",
+      "url": "https://github.com/miyyer/comics",
+      "modalities": [
+        "18_genre_multi_label_taxonomy",
+        "inter_panel_narrative_closure",
+        "story_arc_synopses"
+      ]
+    }
+  },
+  "purpose_specific_datasets": {
+    "vlm_story_director": {
+      "path": "data/datasets/vlm_story_director/train.jsonl",
+      "records_count": 432,
+      "sha256": "b0638aab7918253a59ffce5e4df6d9d5f1868eae0dcc5abc0f24c6911a201b2c"
+    },
+    "perception_ocr_speaker": {
+      "path": "data/datasets/perception_ocr_speaker/train.jsonl",
+      "records_count": 54,
+      "sha256": "a6129b48a4da95c58111ddd94143847b91273ba48d1ef0f31f420576f7d197c2"
+    },
+    "bg_3d_stage": {
+      "path": "data/datasets/bg_3d_stage/train.jsonl",
+      "records_count": 54,
+      "sha256": "117e76bd97455975be4830f9cc4c0e151dc67d3a47649abf21adfc4b75058104"
+    },
+    "wan22_motion_lora": {
+      "path": "data/datasets/wan22_motion_lora/train.jsonl",
+      "records_count": 54,
+      "sha256": "f0b866ef5a81c3609027e8a0ee2245758d712694ed7d4d6ca741eaa64d0cb73f"
+    },
+    "audio_tts_lufs": {
+      "path": "data/datasets/audio_tts_lufs/train.jsonl",
+      "records_count": 18,
+      "sha256": "7f2c6b8b542b7045d43a940c8b96cf80f2746181fd987de7a1780095f038a293"
+    }
+  },
+  "hf_live_samples": null
+}

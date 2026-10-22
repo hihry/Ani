@@ -57,15 +57,13 @@
     }
   },
   "7": {
-    "class_type": "WanImageToVideo",
+    "class_type": "Wan22ImageToVideoLatent",
     "inputs": {
-      "positive": ["5", 0],
-      "negative": ["6", 0],
       "vae": ["3", 0],
       "start_image": ["4", 0],
-      "width": 480,
-      "height": 832,
-      "length": 49,
+      "width": 320,
+      "height": 576,
+      "length": 25,
       "batch_size": 1
     },
     "_meta": {
@@ -85,15 +83,15 @@
     "class_type": "KSampler",
     "inputs": {
       "model": ["1", 0],
-      "positive": ["7", 0],
-      "negative": ["7", 1],
-      "latent_image": ["7", 2],
+      "positive": ["5", 0],
+      "negative": ["6", 0],
+      "latent_image": ["7", 0],
       "seed": 42,
-      "steps": 20,
-      "cfg": 5.0,
+      "steps": 6,
+      "cfg": 3.0,
       "sampler_name": "uni_pc",
       "scheduler": "simple",
-      "denoise": 1.0
+      "denoise": 0.22
     },
     "_meta": {
       "title": "M2A_SAMPLER"

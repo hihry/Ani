@@ -39,6 +39,7 @@ try:
         inpaint_panel_bubbles,
         synthesize_speech_wav,
     )
+    from workers.story_director import build_story_director_plan
 except ImportError:
     from ingest import stitch_vertical_pages
     from slicer import crop_and_save_panels, detect_panels_gutter, infer_shot_type
@@ -58,6 +59,7 @@ except ImportError:
         inpaint_panel_bubbles,
         synthesize_speech_wav,
     )
+    from story_director import build_story_director_plan
 
 
 def _fmt_srt_time(sec: float) -> str:
@@ -259,6 +261,19 @@ def assemble_from_run_state(
     if not panels:
         raise ValueError("No panels present in state.json to assemble")
 
+    # Build Story Director narrative plan & 18-genre theme profile
+    cfg_dict = state.get("config") or {}
+    genre_hint = cfg_dict.get("genre_theme") or cfg_dict.get("genre_id") or None
+    story_plan_path = run_dir / "story" / "story_plan.json"
+    story_plan = build_story_director_plan(
+        panels=panels,
+        genre_hint=genre_hint,
+        run_dir=run_dir,
+        output_path=story_plan_path,
+    )
+    genre_id = story_plan["genre_id"]
+    transition_type = story_plan["theme_profile"]["transition_type"]
+
     tracks_by_panel: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for t in audio_tracks:
         if isinstance(t, dict) and t.get("panel_id"):
@@ -314,6 +329,7 @@ def assemble_from_run_state(
                     target_res=target_res,
                     duration_s=duration_s,
                     fps=fps,
+                    genre_id=genre_id,
                 )
             else:
                 frames = generate_kenburns_frames(
@@ -420,6 +436,8 @@ def assemble_from_run_state(
         transition_frames=transition_frames,
         audio_paths=audio_file_paths,
         audio_events=audio_events,
+        transition_type=transition_type,
+        genre_id=genre_id,
     )
 
     for ext_key in ("avi_path", "webp_path", "mp4_path"):
@@ -431,6 +449,9 @@ def assemble_from_run_state(
         "resolution": list(target_res),
         "total_frames": base_res["total_frames"],
         "total_duration_s": base_res["duration_s"],
+        "genre_id": genre_id,
+        "transition_type": transition_type,
+        "story_plan_path": str(story_plan_path.as_posix()),
         "subtitles_path": str(srt_path.as_posix()),
         "entries": timeline_entries,
     }
@@ -438,6 +459,7 @@ def assemble_from_run_state(
     timeline_path.write_text(json.dumps(timeline_manifest, indent=2), encoding="utf-8")
     base_res["timeline_path"] = str(timeline_path.as_posix())
     base_res["subtitles_path"] = str(srt_path.as_posix())
+    base_res["story_plan_path"] = str(story_plan_path.as_posix())
     return base_res
 
 
