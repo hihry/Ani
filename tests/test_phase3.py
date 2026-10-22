@@ -525,3 +525,64 @@ def test_m3_m7_contract_and_tier_configs() -> None:
     assert dumped["take_number"] == 2
     assert dumped["model_id"] == "wan22-ti2v-5b"
     assert dumped["qc_scores"]["metrics_version"] == 2
+
+
+def test_real_world_webtoon_qc_and_ocr_regressions(tmp_path: Path) -> None:
+    """Verifies real-world webtoon regressions:
+    1) Full-width white top/bottom fade bands are not misdetected as speech bubbles.
+    2) Non-PIL-bitmap noise strokes do not decode as punctuation gibberish.
+    3) Tall webtoon strip (800x1956) rendered via parallax/kenburns passes first_frame_fidelity >= 0.85.
+    4) Wan2.2 A14B dual-expert workflows split steps across M2A_SAMPLER and M2A_SAMPLER_LOW.
+    """
+    from workers.render_parallax import generate_parallax_frames
+    from workers.understanding import _decode_pil_bitmap_text, detect_speech_bubbles_and_text
+
+    # 1. Tall panel with a full-width top white fade band (y=0..150, w=800) + stray dark flecks
+    tall_img = _make_clean_anime_panel(tmp_path / "tall_fade.png", size=(800, 1956))
+    im = Image.open(tall_img).convert("RGB")
+    draw = ImageDraw.Draw(im)
+    draw.rectangle([0, 0, 800, 150], fill=(250, 250, 250))
+    # Add a few clipped dark line fragments along the bottom of the top white fade band
+    for x in range(120, 680, 90):
+        draw.line([(x, 140), (x + 12, 148)], fill=(30, 30, 30), width=2)
+    im.save(tall_img)
+
+    bubbles = detect_speech_bubbles_and_text(im)
+    for b in bubbles:
+        assert not (b["bbox"]["x"] <= 10 and b["bbox"]["w"] >= int(800 * 0.85))
+
+    # 2. Stray non-bitmap strokes inside a white box must not decode into ASCII symbol gibberish
+    noise_crop = Image.new("RGB", (220, 60), (252, 252, 252))
+    ndraw = ImageDraw.Draw(noise_crop)
+    ndraw.line([(20, 28), (35, 25), (50, 31), (85, 27)], fill=(40, 40, 40), width=2)
+    ndraw.point([(110, 29), (130, 27), (155, 30)], fill=(20, 20, 20))
+    assert _decode_pil_bitmap_text(noise_crop) is None
+
+    # 3. Tall strip rendered with parallax and kenburns passes aligned first_frame_fidelity >= 0.85
+    p_frames = generate_parallax_frames(tall_img, target_res=(576, 1024), duration_s=1.0, fps=16)
+    p_qc = compute_clip_qc_metrics(tall_img, p_frames, route="parallax")
+    assert p_qc["first_frame_fidelity"] >= 0.85, f"Expected aligned first_frame_fidelity >= 0.85, got {p_qc}"
+    assert p_qc["new_text_count"] == 0, f"Expected new_text_count == 0 on deterministic parallax, got {p_qc}"
+
+    # 4. Dual-expert Wan2.2 A14B workflow splits steps across high-noise and low-noise samplers
+    a14b_tpl = load_template(REPO_ROOT / "workflows" / "comfyui" / "wan22_i2v_a14b_api.json")
+    a14b_inj = inject(
+        a14b_tpl,
+        image_name="in.png",
+        pos_prompt="pos",
+        neg_prompt="neg",
+        seed=99,
+        width=720,
+        height=1280,
+        frames=49,
+        steps=20,
+        cfg=5.0,
+        fps=16,
+    )
+    high_nodes = [n for n in a14b_inj.values() if isinstance(n, dict) and n.get("_meta", {}).get("title") == "M2A_SAMPLER"]
+    low_nodes = [n for n in a14b_inj.values() if isinstance(n, dict) and n.get("_meta", {}).get("title") == "M2A_SAMPLER_LOW"]
+    assert len(high_nodes) == 1 and len(low_nodes) == 1
+    assert high_nodes[0]["inputs"]["start_at_step"] == 0
+    assert high_nodes[0]["inputs"]["end_at_step"] == 10
+    assert low_nodes[0]["inputs"]["start_at_step"] == 10
+    assert low_nodes[0]["inputs"]["end_at_step"] == 20

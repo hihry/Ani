@@ -51,12 +51,15 @@ class ComfyClient:
         self,
         base_url: str = "http://127.0.0.1:8188",
         timeout_s: float = 1800.0,
-        poll_interval_s: float = 0.05,
+        poll_interval_s: Optional[float] = None,
         http_client: Optional[httpx.Client] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = float(timeout_s)
-        self.poll_interval_s = float(poll_interval_s)
+        if poll_interval_s is None:
+            self.poll_interval_s = 0.05 if http_client is not None else 0.5
+        else:
+            self.poll_interval_s = float(poll_interval_s)
         self._external_client = http_client
 
     def _client(self, timeout: float = 30.0) -> httpx.Client:
@@ -246,7 +249,10 @@ class ComfyClient:
                                 st = client.get("/system_stats").json()
                                 devs = st.get("devices") or []
                                 if devs:
-                                    v_used = float(devs[0].get("vram_used") or devs[0].get("vram_Allocated") or 0.0)
+                                    d0 = devs[0]
+                                    v_used = float(d0.get("vram_used") or d0.get("vram_Allocated") or 0.0)
+                                    if v_used <= 0.0 and d0.get("vram_total") is not None and d0.get("vram_free") is not None:
+                                        v_used = max(0.0, float(d0["vram_total"]) - float(d0["vram_free"]))
                                     peak_vram_gb = round(v_used / (1024 ** 3), 2) if v_used > 1024 else v_used
                             except Exception:
                                 pass

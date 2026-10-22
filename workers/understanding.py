@@ -213,6 +213,26 @@ def detect_speech_bubbles_and_text(
             bw = min(w - bx, body_w_white + 2 * border_pad)
             bh = min(eff_h - by, body_h_white + 2 * border_pad)
 
+            # Reject full-width webtoon gutter bands (touching both left and right panel edges AND top or bottom border)
+            touches_top_or_bottom = by <= 8 or (by + bh) >= (eff_h - 8)
+            if touches_top_or_bottom and (
+                (bx <= 10 and (bx + bw) >= (w - 10) and bw >= int(w * 0.85))
+                or (ex <= 6 and (ex + ew) >= (w - 6) and ew >= int(w * 0.90))
+            ):
+                continue
+
+            # Genuine speech bubbles / text boxes on comic panels have a dark enclosing border or
+            # non-white surroundings on at least 2 sides; reject unbordered edge-bleed fade bands
+            if touches_top_or_bottom and bw >= int(w * 0.55):
+                ch_y1 = max(0, int(body_h_white * 0.22))
+                ch_y2 = min(body_h_white, int(body_h_white * 0.78))
+                ch_x1 = max(0, int(body_w_white * 0.15))
+                ch_x2 = min(body_w_white, int(body_w_white * 0.85))
+                core_dark = int(dark_pixels[ch_y1:ch_y2, ch_x1:ch_x2].sum())
+                total_dark = max(1, int(dark_pixels.sum()))
+                if (core_dark / float(total_dark)) < 0.45:
+                    continue
+
             # Detect pointer tail tip in any of the 4 directions outside main body [bx1_rel:bx2_rel, by1_rel:by2_rel]
             tail_tip: Optional[Tuple[int, int]] = None
             best_tail_len = 2  # require at least 3 pixels protrusion
@@ -341,7 +361,10 @@ def _decode_pil_bitmap_text(crop_img: Image.Image) -> Optional[Tuple[str, float]
     if len(xs) == 0:
         return None
     x_min, y_min = int(xs.min()) + pad, int(ys.min()) + pad
-    x_max = int(xs.max()) + pad
+    x_max, y_max = int(xs.max()) + pad, int(ys.max()) + pad
+    # Single-line PIL default bitmap font is 10x16; multi-line comic speech bubbles have y_max - y_min > 24
+    if (y_max - y_min) > 22:
+        return None
 
     chars, alnum_indices, stack, advs = _build_pil_default_glyph_bank()
 
@@ -410,26 +433,56 @@ def _decode_pil_bitmap_text(crop_img: Image.Image) -> Optional[Tuple[str, float]
     text = re.sub(r"\s+", " ", "".join(decoded).strip())
     if len(text) < 2 or not raw_err_list:
         return None
+    non_space = [c for c in text if not c.isspace()]
+    alnum_count = sum(1 for c in non_space if c.isalnum())
+    alpha_count = sum(1 for c in non_space if c.isalpha())
+    if (
+        not non_space
+        or alnum_count < 2
+        or alpha_count < 2
+        or (alnum_count / float(len(non_space))) < 0.60
+    ):
+        return None
+    if not re.search(r"[A-Za-z]{2,}", text):
+        return None
+    if re.search(r"[`~^_*$@]{2,}|['\".]{4,}", text):
+        return None
     mean_raw = float(np.mean(raw_err_list))
-    if mean_raw > 26.0:
+    if mean_raw > 22.0:
         return None
     conf = round(float(np.clip(0.99 - mean_raw * 0.008, 0.80, 0.99)), 3)
     return text, conf
 
 
+def _is_plausible_ocr_text(txt: str) -> bool:
+    """Checks that an OCR string contains genuine letters/digits rather than punctuation noise."""
+    cleaned = re.sub(r"\s+", "", txt)
+    if len(cleaned) < 2:
+        return False
+    valid_chars = sum(1 for c in cleaned if c.isalnum() or ("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff") or ("\uac00" <= c <= "\ud7a3"))
+    if valid_chars < 2 or (valid_chars / float(len(cleaned))) < 0.50:
+        return False
+    if re.search(r"[`~^_*$@]{2,}|['\".]{4,}", txt):
+        return False
+    return True
+
+
 def _call_external_ocr_if_available(crop_img: Image.Image, language: str) -> Optional[Tuple[str, float]]:
-    """Attempts OCR using local engines (pytesseract / easyocr / rapidocr) or pixel bitmap glyph decoding."""
+    """Attempts OCR using pixel bitmap glyph decoding (for synthetic eval fixtures) or local OCR engines."""
+    pil_res = _decode_pil_bitmap_text(crop_img)
+    if pil_res is not None:
+        return pil_res
     if os.environ.get("M2A_DISABLE_EXTERNAL_OCR", "").strip().lower() not in ("1", "true", "yes"):
         try:
             import pytesseract  # type: ignore
             lang_map = {"ko": "kor+eng", "ja": "jpn+eng", "en": "eng"}
             txt = pytesseract.image_to_string(crop_img, lang=lang_map.get(language, "eng")).strip()
             txt = re.sub(r"\s+", " ", txt)
-            if len(txt) >= 2:
+            if _is_plausible_ocr_text(txt):
                 return txt, 0.92
         except Exception:
             pass
-    return _decode_pil_bitmap_text(crop_img)
+    return None
 
 
 def _infer_text_and_emotion_from_strokes(

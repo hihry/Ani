@@ -68,6 +68,8 @@ class PanelJSON(BaseModel):
     shot: Literal["close_up", "medium", "wide", "splash"] = "medium"
     characters: list[CharacterRef] = Field(default_factory=list)
     action: str = ""
+    action_prompt: str = ""
+    motion_type: str = ""
     dialogue: list[DialogueLine] = Field(default_factory=list)
     sfx: list[SFX] = Field(default_factory=list)
     motion_prompt: str = ""

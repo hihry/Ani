@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Downloads and SHA256-verifies ComfyUI model weights pinned in `workflows/comfyui/manifest.yaml`."""
 from __future__ import annotations
 
 import argparse

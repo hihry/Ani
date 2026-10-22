@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/m2a/manhwa2anime/internal/client"
 	"github.com/m2a/manhwa2anime/internal/config"
@@ -778,11 +779,13 @@ func GenerateNode(ctx context.Context, state *model.RunState, cfg *config.Pipeli
 			ComfyURL:     comfyURL,
 		}
 
+		t0 := time.Now()
 		rendered, err := wc.RenderClip(ctx, srcPath, clipPath, p.Route, p.Shot, p.DurationS, fps, resW, resH, opt)
 		if err != nil {
 			// If RouteI2V failed (e.g. OOM, node error, or ComfyUI unavailable), record failed candidate
 			// so QCNode can walk the model/route fallback ladder instead of aborting the entire run.
 			if p.Route == model.RouteI2V {
+				elapsedS := time.Since(t0).Seconds()
 				cand := model.ClipCandidate{
 					PanelID:     p.PanelID,
 					Path:        filepath.ToSlash(clipPath),
@@ -790,9 +793,17 @@ func GenerateNode(ctx context.Context, state *model.RunState, cfg *config.Pipeli
 					Seed:        seed,
 					Route:       model.RouteI2V,
 					ModelID:     modelID,
+					GenSeconds:  elapsedS,
 					RenderError: err.Error(),
 					Accepted:    false,
 				}
+				stateMu.Lock()
+				if elapsedS > 0 {
+					state.RecordModelCost(modelID, elapsedS)
+				}
+				state.ClipCandidates[p.PanelID] = []model.ClipCandidate{cand}
+				_ = state.Save(runDir)
+				stateMu.Unlock()
 				results[i] = genResult{
 					cand:      cand,
 					routeUsed: model.RouteI2V,
@@ -1038,9 +1049,14 @@ func QCNode(ctx context.Context, state *model.RunState, cfg *config.PipelineConf
 				ComfyURL:     comfyURL,
 			}
 
+			t0 := time.Now()
 			rendered, err := wc.RenderClip(ctx, srcPath, fbClipPath, nextRoute, p.Shot, p.DurationS, fps, resW, resH, opt)
 			if err != nil {
 				if nextRoute == model.RouteI2V {
+					elapsedS := time.Since(t0).Seconds()
+					if elapsedS > 0 {
+						state.RecordModelCost(nextModel, elapsedS)
+					}
 					lastRenderErr = err.Error()
 					state.ClipCandidates[p.PanelID] = append(state.ClipCandidates[p.PanelID], model.ClipCandidate{
 						PanelID:        p.PanelID,
@@ -1049,6 +1065,7 @@ func QCNode(ctx context.Context, state *model.RunState, cfg *config.PipelineConf
 						Seed:           seed,
 						Route:          nextRoute,
 						ModelID:        nextModel,
+						GenSeconds:     elapsedS,
 						FallbackReason: fbReason,
 						RenderError:    err.Error(),
 						Accepted:       false,

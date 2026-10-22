@@ -170,7 +170,8 @@ class PipelineGraph:
         if not plan_file.is_file():
             return
         try:
-            raw_list = json.loads(plan_file.read_text(encoding="utf-8"))
+            raw_data = json.loads(plan_file.read_text(encoding="utf-8"))
+            raw_list = raw_data.get("panels") if isinstance(raw_data, dict) else raw_data
             if isinstance(raw_list, list) and len(raw_list) == len(state.panels):
                 for i, raw_obj in enumerate(raw_list):
                     if isinstance(raw_obj, dict):
@@ -179,7 +180,9 @@ class PipelineGraph:
                         if "motion_intensity" in raw_obj:
                             raw_obj["motion_intensity"] = max(0.0, min(1.0, float(raw_obj["motion_intensity"])))
                         merged = state.panels[i].model_dump()
-                        merged.update(raw_obj)
+                        for k in ("route", "duration_s", "motion_intensity", "shot", "motion_prompt", "action"):
+                            if k in raw_obj:
+                                merged[k] = raw_obj[k]
                         state.panels[i] = PanelJSON.model_validate(merged)
         except Exception as e:
             logger.warning(f"Skipping invalid CP2 edit in {plan_file}: {e}")

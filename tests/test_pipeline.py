@@ -873,4 +873,41 @@ def test_phase2_qc_last_frame_text_leakage_detection(tmp_path: Path):
     assert qc_res["overall_pass"] is False
 
 
+def test_webtoon_gutter_ocr_garbage_and_pan_qc_regressions(tmp_path: Path):
+    """Verifies fixes for real-world webtoon gutter false-positive bubbles, OCR punctuation soup, and pan_down/tall-strip QC."""
+    from workers.understanding import _decode_pil_bitmap_text, _is_plausible_ocr_text
+
+    # 1. Full-width top/bottom webtoon gutter band with border fragments must NOT be detected as a speech bubble
+    panel = Image.new("RGB", (800, 520), (35, 30, 55))
+    draw = ImageDraw.Draw(panel)
+    # Full-width bottom white webtoon gutter (x=0..800, y=462..520) with minor border specks
+    draw.rectangle([0, 462, 800, 520], fill=(255, 255, 255))
+    draw.rectangle([120, 464, 126, 469], fill=(25, 25, 30))
+    draw.rectangle([480, 464, 488, 469], fill=(25, 25, 30))
+    assert detect_speech_bubbles_and_text(panel) == []
+
+    # 2. Punctuation soup strings must be rejected by OCR plausibility filter
+    assert not _is_plausible_ocr_text("...`__aw\"''''''7~~`")
+    assert not _is_plausible_ocr_text("$ $")
+    assert not _is_plausible_ocr_text("^ .' m .__ _* '._* .* .* * @")
+    assert _is_plausible_ocr_text("Arise.")
+
+    # Multi-line tall comic stroke region (>22px tall) must not be force-decoded by single-line 10x16 PIL bitmap matcher
+    tall_crop = Image.new("RGB", (220, 90), (255, 255, 255))
+    td = ImageDraw.Draw(tall_crop)
+    td.rectangle([30, 18, 180, 26], fill=(20, 20, 20))
+    td.rectangle([30, 55, 180, 65], fill=(20, 20, 20))
+    assert _decode_pil_bitmap_text(tall_crop) is None
+
+    # 3. Camera pan_down and zoom_out clips must pass aligned first_frame_fidelity
+    sample_panel = ROOT / "data" / "eval" / "sample_page_1.png"
+    for mtype in ("pan_down", "pan_right", "zoom_out"):
+        frames = generate_kenburns_frames(sample_panel, target_res=(180, 320), duration_s=1.0, fps=8, motion_type=mtype)
+        qc_res = compute_clip_qc_metrics(sample_panel, frames, route="kenburns")
+        assert qc_res["first_frame_fidelity"] >= 0.75, f"{mtype} first_frame_fidelity too low: {qc_res}"
+        assert qc_res["new_text_count"] == 0
+        assert qc_res["overall_pass"] is True, f"{mtype} failed QC: {qc_res}"
+
+
+
 

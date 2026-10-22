@@ -50,6 +50,7 @@ ALL_KNOWN_NODES = [
     "HunyuanImageToVideo",
     "RandomNoise",
     "KSampler",
+    "KSamplerAdvanced",
     "VAEDecode",
     "SaveWEBM",
 ]

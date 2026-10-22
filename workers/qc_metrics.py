@@ -87,6 +87,57 @@ def _compute_ssim_rgb(im_a: Image.Image, im_b: Image.Image) -> float:
     return float(np.clip(0.5 * max(0.0, ssim_val) + 0.5 * hist_sim, 0.0, 1.0))
 
 
+def _compute_aligned_first_frame_fidelity(
+    src_img: Image.Image,
+    src_ref: Image.Image,
+    src_overscan: Image.Image,
+    first_frame: Image.Image,
+) -> float:
+    """Computes first-frame fidelity allowing legitimate camera start pan/zoom/scroll offsets
+    within the source panel canvas (e.g. top-of-strip scroll start or Ken Burns/Parallax overscan).
+    """
+    best = max(
+        _compute_ssim_rgb(src_ref, first_frame),
+        _compute_ssim_rgb(src_overscan, first_frame),
+        _compute_ssim_rgb(src_img, first_frame),
+    )
+    if cv2 is None:
+        return round(best, 4)
+
+    try:
+        from workers.render_kenburns import prepare_cinematic_canvas
+    except ImportError:
+        from render_kenburns import prepare_cinematic_canvas
+
+    for overscan in (1.07, 1.16, 1.20):
+        canvas = prepare_cinematic_canvas(
+            src_img, target_res=first_frame.size, overscan=overscan, preserve_tall=True
+        )
+        cw, ch = canvas.size
+        fw, fh = first_frame.size
+        if cw < fw or ch < fh:
+            continue
+        # Downsample both proportionally so template matching is < 2ms
+        scale = 160.0 / float(max(1, fw))
+        tw = 160
+        th = max(32, int(round(fh * scale)))
+        sw = max(tw, int(round(cw * scale)))
+        sh = max(th, int(round(ch * scale)))
+
+        search_arr = np.asarray(canvas.resize((sw, sh), Image.Resampling.BILINEAR), dtype=np.uint8)
+        tpl_arr = np.asarray(first_frame.resize((tw, th), Image.Resampling.BILINEAR), dtype=np.uint8)
+        if sh > th or sw > tw:
+            res = cv2.matchTemplate(search_arr, tpl_arr, cv2.TM_CCOEFF_NORMED)
+            _, _, _, max_loc = cv2.minMaxLoc(res)
+            mx, my = int(max_loc[0]), int(max_loc[1])
+            matched_patch = Image.fromarray(search_arr[my : my + th, mx : mx + tw, :])
+            best = max(best, _compute_ssim_rgb(matched_patch, first_frame))
+        else:
+            best = max(best, _compute_ssim_rgb(canvas, first_frame))
+
+    return round(float(np.clip(best, 0.0, 1.0)), 4)
+
+
 def _compute_style_drift(ref_im: Image.Image, sampled_frames: List[Image.Image]) -> float:
     """Measures line-art edge density drift + LAB chrominance drift relative to source plate."""
     if not sampled_frames:
@@ -185,16 +236,25 @@ def compute_clip_qc_metrics(
     mid_frame = frames[len(frames) // 2].convert("RGB")
 
     src_ref = src_img
+    src_overscan = src_img
+    src_overscan_120 = src_img
+    src_tall = src_img
     if src_img.size != first_frame.size:
         try:
             from workers.render_kenburns import prepare_cinematic_canvas
         except ImportError:
             from render_kenburns import prepare_cinematic_canvas
         src_ref = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.0)
+        src_overscan = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.16)
+        src_overscan_120 = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.20)
+        src_tall = prepare_cinematic_canvas(
+            src_img, target_res=first_frame.size, overscan=1.20, preserve_tall=True
+        )
 
     # 1. Identity Similarity (global palette + central subject structural match + temporal self-consistency)
     v_src = _hist_vec(src_img)
     v_ref = _hist_vec(src_ref)
+    v_over = _hist_vec(src_overscan_120)
     v_first = _hist_vec(first_frame)
     v_mid = _hist_vec(mid_frame)
     v_last = _hist_vec(last_frame)
@@ -202,20 +262,25 @@ def compute_clip_qc_metrics(
     sim_palette_src = max(
         float(np.mean([np.dot(v_src, v_first), np.dot(v_src, v_mid), np.dot(v_src, v_last)])),
         float(np.mean([np.dot(v_ref, v_first), np.dot(v_ref, v_mid), np.dot(v_ref, v_last)])),
+        float(np.mean([np.dot(v_over, v_first), np.dot(v_over, v_mid), np.dot(v_over, v_last)])),
     )
     sim_temporal = float(0.5 * np.dot(v_first, v_last) + 0.5 * np.dot(v_first, v_mid))
 
     # Central subject structural similarity (catches face swaps / middle-crop corruption)
     subj_sim_mid = max(
         _spatial_subject_similarity(src_ref, mid_frame),
+        _spatial_subject_similarity(src_overscan_120, mid_frame),
         _spatial_subject_similarity(first_frame, mid_frame),
     )
     subj_sim_last = max(
         _spatial_subject_similarity(src_ref, last_frame),
+        _spatial_subject_similarity(src_overscan_120, last_frame),
         _spatial_subject_similarity(first_frame, last_frame),
     )
     subj_sim_src = max(
         _spatial_subject_similarity(src_ref, first_frame),
+        _spatial_subject_similarity(src_overscan, first_frame),
+        _spatial_subject_similarity(src_overscan_120, first_frame),
         _spatial_subject_similarity(src_img, first_frame),
     )
     subj_sim = min(subj_sim_src, 0.5 * (subj_sim_mid + subj_sim_last))
@@ -226,23 +291,12 @@ def compute_clip_qc_metrics(
         raw_identity = min(raw_identity, min(sim_palette_src, subj_sim))
     identity_similarity = round(float(np.clip(raw_identity, 0.0, 1.0)), 4)
 
-    # 2. First-frame fidelity (comparing against both overscan=1.0 and overscan=1.16 to support Ken Burns zoom crops)
-    src_overscan = src_ref
-    if src_img.size != first_frame.size:
-        try:
-            from workers.render_kenburns import prepare_cinematic_canvas
-        except ImportError:
-            from render_kenburns import prepare_cinematic_canvas
-        src_overscan = prepare_cinematic_canvas(src_img, target_res=first_frame.size, overscan=1.16)
-
-    first_frame_fidelity = round(
-        max(
-            _compute_ssim_rgb(src_ref, first_frame),
-            _compute_ssim_rgb(src_overscan, first_frame),
-            _compute_ssim_rgb(src_img, first_frame),
-            float(np.dot(v_src, v_first)),
-        ),
-        4,
+    # 2. First-frame fidelity (comparing against overscan & tall-strip camera start windows)
+    first_frame_fidelity = _compute_aligned_first_frame_fidelity(
+        src_img=src_img,
+        src_ref=src_ref,
+        src_overscan=src_overscan,
+        first_frame=first_frame,
     )
 
     # 3. Optical flow motion score, flow-warped temporal error, and flicker score
@@ -326,6 +380,8 @@ def compute_clip_qc_metrics(
             motion_raw = max(mean_flow_px * 0.18, mean_delta * 18.0)
             if mean_delta < 1e-4 and mean_flow_px < 0.01:
                 motion_raw = 0.0
+            elif warp_error < 0.09 and flicker_std < 0.06:
+                motion_raw = min(motion_raw, 0.92)
             motion_score = round(float(np.clip(motion_raw, 0.0, 1.0)), 4)
         else:
             mean_delta = float(np.mean(deltas))
@@ -344,7 +400,15 @@ def compute_clip_qc_metrics(
     style_drift = _compute_style_drift(src_ref, style_Sample)
 
     # 5. Text Leakage QC across sampled frames relative to source plate
-    src_bubbles = min(count_residual_text_bubbles(src_img), count_residual_text_bubbles(src_ref))
+    src_candidates = [src_img, src_ref, src_overscan, src_overscan_120, src_tall]
+    if src_tall.size[1] > first_frame.size[1]:
+        tw, th = src_tall.size
+        fw, fh = first_frame.size
+        x0 = max(0, (tw - fw) // 2)
+        src_candidates.append(src_tall.crop((x0, 0, x0 + fw, fh)))
+        src_candidates.append(src_tall.crop((x0, th - fh, x0 + fw, th)))
+
+    src_bubbles = max(count_residual_text_bubbles(im) for im in src_candidates)
     sample_indices = sorted({0, len(frames) // 4, len(frames) // 2, (3 * len(frames)) // 4, len(frames) - 1})
     max_frame_bubbles = 0
     for idx in sample_indices:

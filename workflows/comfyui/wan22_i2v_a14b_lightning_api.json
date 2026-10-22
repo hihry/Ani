@@ -17,7 +17,28 @@
       "strength_model": 1.0
     },
     "_meta": {
-      "title": "Load LightX2V 4-Step LoRA"
+      "title": "Load LightX2V 4-Step High-Noise LoRA"
+    }
+  },
+  "13": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "_meta": {
+      "title": "Load Wan2.2 A14B Low-Noise UNET"
+    }
+  },
+  "14": {
+    "class_type": "LoraLoaderModelOnly",
+    "inputs": {
+      "model": ["13", 0],
+      "lora_name": "Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1/low_noise_model.safetensors",
+      "strength_model": 1.0
+    },
+    "_meta": {
+      "title": "Load LightX2V 4-Step Low-Noise LoRA"
     }
   },
   "3": {
@@ -94,27 +115,51 @@
     }
   },
   "10": {
-    "class_type": "KSampler",
+    "class_type": "KSamplerAdvanced",
     "inputs": {
-      "model": ["2", 0],
-      "positive": ["8", 0],
-      "negative": ["8", 1],
-      "latent_image": ["8", 2],
-      "seed": 42,
+      "add_noise": "enable",
+      "noise_seed": 42,
       "steps": 4,
       "cfg": 1.0,
       "sampler_name": "uni_pc",
       "scheduler": "simple",
-      "denoise": 1.0
+      "model": ["2", 0],
+      "positive": ["8", 0],
+      "negative": ["8", 1],
+      "latent_image": ["8", 2],
+      "start_at_step": 0,
+      "end_at_step": 2,
+      "return_with_leftover_noise": "enable"
     },
     "_meta": {
       "title": "M2A_SAMPLER"
     }
   },
+  "15": {
+    "class_type": "KSamplerAdvanced",
+    "inputs": {
+      "add_noise": "disable",
+      "noise_seed": 42,
+      "steps": 4,
+      "cfg": 1.0,
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "model": ["14", 0],
+      "positive": ["8", 0],
+      "negative": ["8", 1],
+      "latent_image": ["10", 0],
+      "start_at_step": 2,
+      "end_at_step": 4,
+      "return_with_leftover_noise": "disable"
+    },
+    "_meta": {
+      "title": "M2A_SAMPLER_LOW"
+    }
+  },
   "11": {
     "class_type": "VAEDecode",
     "inputs": {
-      "samples": ["10", 0],
+      "samples": ["15", 0],
       "vae": ["4", 0]
     },
     "_meta": {

@@ -76,6 +76,19 @@ def inject(
                 inp["seed"] = int(seed)
             if "noise_seed" in inp:
                 inp["noise_seed"] = int(seed)
+            if "end_at_step" in inp:
+                inp["start_at_step"] = 0
+                inp["end_at_step"] = max(1, int(steps) // 2)
+        elif tag == "M2A_SAMPLER_LOW":
+            inp["steps"] = int(steps)
+            if "cfg" in inp:
+                inp["cfg"] = float(cfg)
+            if "seed" in inp:
+                inp["seed"] = int(seed)
+            if "noise_seed" in inp:
+                inp["noise_seed"] = int(seed)
+            inp["start_at_step"] = max(1, int(steps) // 2)
+            inp["end_at_step"] = int(steps)
         elif tag == "M2A_OUTPUT":
             if "fps" in inp:
                 inp["fps"] = float(fps)

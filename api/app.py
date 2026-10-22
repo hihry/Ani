@@ -67,7 +67,7 @@ class CheckpointUpdateRequest(BaseModel):
 @app.post("/jobs", response_model=JobStatusResponse)
 def submit_job(request: JobSubmitRequest) -> JobStatusResponse:
     """Submits and starts a pipeline job backed by runs/<job_id>/state.json."""
-    tier = request.compute_tier if request.compute_tier in ("t0", "t1", "t2") else "t1"
+    tier = request.compute_tier if request.compute_tier in ("t0", "t1s", "t1", "t2") else "t1"
     lang = request.source_language if request.source_language in ("ko", "ja", "en") else "ko"
     cfg = load_config(tier=tier, overrides=request.config or None)
 

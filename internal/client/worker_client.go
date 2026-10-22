@@ -514,6 +514,7 @@ func (c *WorkerClient) RenderClip(
 func (c *WorkerClient) pollRenderJob(ctx context.Context, jobID string) (*RenderResult, error) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	polls := 0
 
 	for {
 		select {
@@ -523,6 +524,10 @@ func (c *WorkerClient) pollRenderJob(ctx context.Context, jobID string) (*Render
 			delCancel()
 			return nil, ctx.Err()
 		case <-ticker.C:
+			polls++
+			if polls == 5 {
+				ticker.Reset(500 * time.Millisecond)
+			}
 			var st renderJobStatusResp
 			if err := c.doJSON(ctx, http.MethodGet, "/render/jobs/"+jobID, nil, &st); err != nil {
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

@@ -15,25 +15,45 @@ venv/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
 
-# === ML / Data ===
-runs/
+# === ML / Model Weights & Caches ===
+models/
+m2a_models/
+.cache/
+.hf_cache/
 *.pt
 *.pth
 *.safetensors
 *.ckpt
-models/
+*.gguf
+*.onnx
+*.bin
+
+# === Pipeline Runs & Local User Data ===
+runs/
+data/my_chapter/
+data/my_manhwa/
+data/bakeoff/private/
 data/eval/*.png
 data/eval/*.jpg
 data/eval/*.webp
 
-# === IDE ===
+# === Generated Media Artifacts ===
+*.avi
+*.mp4
+*.webm
+*.wav
+
+# === IDE & OS ===
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# === OS ===
 .DS_Store
 Thumbs.db
 

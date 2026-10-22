@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from m2a.config import PipelineConfig
-from m2a.state import ClipCandidate, QCScores, RunState
+from m2a.state import ClipCandidate, QCScores, RunState, compute_deterministic_seed
 from workers.pipeline_cli import render_single_panel_clip
 
 logger = logging.getLogger(__name__)
@@ -19,14 +19,18 @@ def _next_fallback_route(route: str) -> str:
     return "kenburns"
 
 
-def _evaluate_qc(s: QCScores, config: PipelineConfig) -> bool:
-    min_motion = config.qc.min_motion if config.qc.min_motion > 0 else 0.01
-    max_motion = config.qc.max_motion if config.qc.max_motion > 0 else 0.98
+def _evaluate_qc(s: QCScores, config: PipelineConfig, route: str = "parallax") -> bool:
+    rt = config.qc.per_route.get(route)
+    min_id = rt.min_identity_similarity if rt and rt.min_identity_similarity > 0 else config.qc.identity_threshold
+    max_flk = rt.max_flicker_score if rt and rt.max_flicker_score > 0 else config.qc.flicker_threshold
+    min_mot = rt.min_motion_score if rt and rt.min_motion_score > 0 else (config.qc.min_motion if config.qc.min_motion > 0 else 0.01)
+    max_mot = rt.max_motion_score if rt and rt.max_motion_score > 0 else (config.qc.max_motion if config.qc.max_motion > 0 else 0.98)
+
     return (
-        s.identity_similarity >= config.qc.identity_threshold
-        and s.flicker_score <= config.qc.flicker_threshold
+        s.identity_similarity >= min_id
+        and s.flicker_score <= max_flk
         and 0 <= s.new_text_count <= config.qc.max_new_text_lines
-        and min_motion <= s.motion_score <= max_motion
+        and min_mot <= s.motion_score <= max_mot
     )
 
 
@@ -48,7 +52,8 @@ def qc(state: RunState, config: PipelineConfig) -> RunState:
         candidates = state.clip_candidates.get(panel.panel_id, [])
         accepted: ClipCandidate | None = None
         for cand in candidates:
-            passed = _evaluate_qc(cand.qc_scores, config)
+            cand_route = cand.route or panel.route
+            passed = _evaluate_qc(cand.qc_scores, config, route=cand_route)
             cand.qc_scores.overall_pass = passed
             cand.accepted = passed
             if passed and accepted is None:
@@ -76,6 +81,8 @@ def qc(state: RunState, config: PipelineConfig) -> RunState:
                 raise FileNotFoundError(f"qc fallback {panel.panel_id}: source image not found: {src_img}")
 
             fb_path = clips_dir / f"{panel.panel_id}_take{take:02d}_{next_route}.avi"
+            seed = compute_deterministic_seed(state.config.run_id, panel.panel_id, take)
+            t0 = time.time()
             rendered = render_single_panel_clip(
                 image_path=src_img,
                 output_path=fb_path,
@@ -84,14 +91,24 @@ def qc(state: RunState, config: PipelineConfig) -> RunState:
                 duration_s=panel.duration_s,
                 fps=config.composition.fps,
                 target_res=(config.composition.resolution[0], config.composition.resolution[1]),
+                panel_id=panel.panel_id,
+                model_id=next_route,
+                seed=seed,
+                action_prompt=panel.action_prompt or panel.motion_prompt or panel.action,
             )
+            gen_s = float(rendered.get("gen_seconds") or (time.time() - t0))
+            state.cost_ledger.add_model_cost(next_route, gen_s)
             fb_qc = QCScores(**rendered["qc_scores"])
-            passed = _evaluate_qc(fb_qc, config)
+            passed = _evaluate_qc(fb_qc, config, route=next_route)
             fb_qc.overall_pass = passed
             fb_cand = ClipCandidate(
                 panel_id=panel.panel_id,
                 path=str(fb_path.as_posix()),
                 take_number=take,
+                route=next_route,
+                model_id=next_route,
+                seed=seed,
+                gen_seconds=round(gen_s, 3),
                 qc_scores=fb_qc,
                 accepted=passed,
             )
