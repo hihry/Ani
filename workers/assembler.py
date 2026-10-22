@@ -18,7 +18,7 @@ import textwrap
 import wave
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 import numpy as np
 import logging
 
@@ -36,6 +36,11 @@ try:
     from workers.qc_metrics import compute_clip_qc_metrics
 except ImportError:
     from qc_metrics import compute_clip_qc_metrics
+
+try:
+    from workers.audio_director import mix_cinematic_soundtrack, synthesize_expressive_speech_wav
+except ImportError:
+    from audio_director import mix_cinematic_soundtrack, synthesize_expressive_speech_wav
 
 logger = logging.getLogger("m2a.assembler")
 
@@ -59,12 +64,112 @@ def _load_subtitle_font(size: int = 22) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def render_transition_frames(
+    tail_a: List[Image.Image],
+    head_b: List[Image.Image],
+    transition_type: str = "crossfade",
+) -> List[Image.Image]:
+    """Renders frame-accurate transition frames between `tail_a` and `head_b` supporting all 10 anime transition styles."""
+    n = min(len(tail_a), len(head_b))
+    if n <= 0:
+        return []
+
+    ttype = (transition_type or "crossfade").strip().lower()
+    blended: List[Image.Image] = []
+    mid_idx = n // 2
+
+    for i in range(n):
+        alpha = float(i + 1) / float(n + 1)
+        fa = tail_a[i].convert("RGB")
+        fb = head_b[i].convert("RGB")
+        w, h = fa.size
+
+        if ttype == "impact_flash":
+            # Sakuga high-contrast impact frame at midpoint + sharp cut
+            base = Image.blend(fa, fb, 1.0 if i >= mid_idx else 0.0)
+            if i == mid_idx:
+                inv = ImageOps.invert(base.convert("L")).convert("RGB")
+                hi_contrast = ImageEnhance.Contrast(inv).enhance(2.8)
+                blended.append(Image.blend(base, hi_contrast, 0.78))
+            elif abs(i - mid_idx) == 1:
+                white = Image.new("RGB", (w, h), (245, 250, 255))
+                blended.append(Image.blend(base, white, 0.42))
+            else:
+                blended.append(Image.blend(fa, fb, alpha))
+
+        elif ttype == "whip_pan":
+            # Fast horizontal motion-blurred slide transition
+            shift_px = int(round((1.0 - alpha) * w))
+            canvas = Image.new("RGB", (w, h))
+            canvas.paste(fa, (shift_px - w, 0))
+            canvas.paste(fb, (shift_px, 0))
+            blur_rad = max(2, int(round(math.sin(math.pi * alpha) * (w * 0.025))))
+            blended.append(canvas.filter(ImageFilter.BoxBlur(blur_rad)))
+
+        elif ttype in ("dreamy_dissolve", "petal_dissolve"):
+            # Soft bloom / warm sakura bokeh dissolve
+            soft_a = fa.filter(ImageFilter.GaussianBlur(radius=4 * alpha))
+            soft_b = fb.filter(ImageFilter.GaussianBlur(radius=4 * (1.0 - alpha)))
+            mix = Image.blend(soft_a, soft_b, alpha)
+            bloom_strength = math.sin(math.pi * alpha) * (0.32 if ttype == "petal_dissolve" else 0.24)
+            tint_color = (255, 228, 240) if ttype == "petal_dissolve" else (245, 248, 255)
+            tint = Image.new("RGB", (w, h), tint_color)
+            blended.append(Image.blend(mix, tint, bloom_strength))
+
+        elif ttype == "fade_through_black":
+            # Cinematic dip-to-black transition
+            black = Image.new("RGB", (w, h), (6, 6, 10))
+            if alpha < 0.5:
+                blended.append(Image.blend(fa, black, alpha * 2.0))
+            else:
+                blended.append(Image.blend(black, fb, (alpha - 0.5) * 2.0))
+
+        elif ttype == "light_burst_flash":
+            # Golden/cyan magical light flare across cut
+            mix = Image.blend(fa, fb, alpha)
+            flare = math.sin(math.pi * alpha) ** 1.4
+            bright = ImageEnhance.Brightness(mix).enhance(1.0 + 0.85 * flare)
+            blended.append(bright)
+
+        elif ttype == "glitch_cut":
+            # Chromatic RGB channel offset + scanline slice
+            base = fb if alpha >= 0.5 else fa
+            arr = np.asarray(base, dtype=np.uint8).copy()
+            shift = max(2, int(round(math.sin(math.pi * alpha) * (w * 0.03))))
+            arr[:, :, 0] = np.roll(arr[:, :, 0], shift, axis=1)
+            arr[:, :, 2] = np.roll(arr[:, :, 2], -shift, axis=1)
+            # Interleave horizontal slice from other clip
+            other_arr = np.asarray(fa if alpha >= 0.5 else fb, dtype=np.uint8)
+            band_h = max(8, h // 8)
+            y0 = int((alpha * h * 0.7)) % max(1, h - band_h)
+            arr[y0 : y0 + band_h] = other_arr[y0 : y0 + band_h]
+            blended.append(Image.fromarray(arr))
+
+        elif ttype in ("wipe_cut", "hud_scan_wipe"):
+            # Sharp diagonal or glowing cyan HUD scanline wipe
+            wipe_x = int(round(alpha * w))
+            canvas = fb.copy()
+            if wipe_x < w:
+                right_crop = fa.crop((wipe_x, 0, w, h))
+                canvas.paste(right_crop, (wipe_x, 0))
+            draw = ImageDraw.Draw(canvas)
+            line_col = (60, 225, 255) if ttype == "hud_scan_wipe" else (255, 255, 255)
+            draw.line([(wipe_x, 0), (wipe_x, h)], fill=line_col, width=4)
+            blended.append(canvas)
+
+        else:
+            blended.append(Image.blend(fa, fb, alpha))
+
+    return blended
+
+
 def crossfade_transition(
     clip_a: List[Image.Image],
     clip_b: List[Image.Image],
     transition_frames: int = 12,
+    transition_type: str = "crossfade",
 ) -> List[Image.Image]:
-    """Blends the tail of clip_a with the head of clip_b using linear alpha crossfade."""
+    """Blends the tail of clip_a with the head of clip_b using the specified transition style."""
     if transition_frames <= 0 or len(clip_a) < transition_frames or len(clip_b) < transition_frames:
         return clip_a + clip_b
 
@@ -73,12 +178,7 @@ def crossfade_transition(
     head_b = clip_b[:transition_frames]
     tail_b = clip_b[transition_frames:]
 
-    blended: List[Image.Image] = []
-    for i in range(transition_frames):
-        alpha = float(i + 1) / float(transition_frames + 1)
-        blended_frame = Image.blend(tail_a[i], head_b[i], alpha)
-        blended.append(blended_frame)
-
+    blended = render_transition_frames(tail_a, head_b, transition_type=transition_type)
     return lead_a + blended + tail_b
 
 
@@ -101,26 +201,54 @@ def inpaint_panel_bubbles(
         m_img = Image.open(mask_path).convert("L").resize((w, h), Image.Resampling.NEAREST)
         mask = (np.asarray(m_img, dtype=np.uint8) > 127).astype(np.uint8) * 255
 
-    # 2. Mask explicit dialogue / SFX bounding boxes (expanding downward to cover pointer tails & dark outlines)
+    def _add_tight_bubble_mask(bx0: int, by0: int, bw0: int, bh0: int, pad_px: int = 6) -> None:
+        x1 = max(0, bx0)
+        y1 = max(0, by0)
+        x2 = min(w, bx0 + bw0)
+        y2 = min(h, by0 + bh0)
+        if x2 - x1 <= 8 or y2 - y1 <= 8:
+            return
+        if cv2 is not None:
+            sub = arr[y1:y2, x1:x2]
+            r_c, g_c, b_c = sub[:, :, 0], sub[:, :, 1], sub[:, :, 2]
+            max_c = cv2.max(cv2.max(r_c, g_c), b_c)
+            min_c = cv2.min(cv2.min(r_c, g_c), b_c)
+            chroma_u8 = cv2.subtract(max_c, min_c)
+            gray_u16 = r_c.astype(np.uint16) + g_c.astype(np.uint16) + b_c.astype(np.uint16)
+            sub_white = ((gray_u16 >= 645) & (chroma_u8 <= 36)).astype(np.uint8) * 255
+            cnts, _ = cv2.findContours(sub_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            sub_area = float((y2 - y1) * (x2 - x1))
+            valid_cnts = [c for c in cnts if cv2.contourArea(c) >= max(64.0, sub_area * 0.08)]
+            if valid_cnts:
+                local_mask = np.zeros((y2 - y1, x2 - x1), dtype=np.uint8)
+                cv2.drawContours(local_mask, valid_cnts, -1, 255, thickness=cv2.FILLED)
+                k_sz = max(5, 2 * pad_px + 1)
+                dil_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_sz, k_sz))
+                local_mask = cv2.dilate(local_mask, dil_k, iterations=1)
+                mask[y1:y2, x1:x2] = np.maximum(mask[y1:y2, x1:x2], local_mask)
+                return
+        mask[y1:y2, x1:x2] = 255
+
+    # 2. Mask explicit dialogue / SFX bounding boxes using tight bubble contour masking
     if bubble_bboxes:
         for b in bubble_bboxes:
             bx = max(0, int(b.get("x", 0)) - 8)
             by = max(0, int(b.get("y", 0)) - 8)
             bw = int(b.get("w", 0)) + 16
-            bh = int(b.get("h", 0)) + 28  # +20px below bbox bottom to capture speech-bubble pointer tail
+            bh = int(b.get("h", 0)) + 22
             if bw > 16 and bh > 16:
-                mask[by : min(h, by + bh), bx : min(w, bx + bw)] = 255
+                _add_tight_bubble_mask(bx, by, bw, bh, pad_px=9)
 
     # 3. Always union with Phase 2 morphological bubble detector envelope when no precomputed mask_path was given
     if mask_path is None:
         detected = detect_speech_bubbles_and_text(img_pil)
         for reg in detected:
             eb = reg.get("envelope_bbox") or reg["bbox"]
-            ex = max(0, int(eb["x"]) - 4)
-            ey = max(0, int(eb["y"]) - 4)
-            ew = int(eb["w"]) + 8
-            eh = int(eb["h"]) + 8
-            mask[ey : min(h, ey + eh), ex : min(w, ex + ew)] = 255
+            ex = max(0, int(eb["x"]) - 6)
+            ey = max(0, int(eb["y"]) - 6)
+            ew = int(eb["w"]) + 12
+            eh = int(eb["h"]) + 12
+            _add_tight_bubble_mask(ex, ey, ew, eh, pad_px=9)
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +257,7 @@ def inpaint_panel_bubbles(
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         mask = cv2.dilate(mask, kernel, iterations=1)
 
-        # Pre-fill masked spans using vectorized 2D boundary interpolation so large or edge-touching bubbles leave zero white haze
+        # Pre-fill masked spans using 2D inverse-distance harmonic boundary interpolation
         clean_arr = arr.copy()
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
         frame_pad = min(6, max(2, min(w, h) // 40))
@@ -154,10 +282,77 @@ def inpaint_panel_bubbles(
 
             comp_mask_2d = labels[ry:ry2, rx:rx2] == lbl
             if has_left or has_right:
-                left_col = clean_arr[ry:ry2, lx if has_left else tx, :].astype(np.float32)[:, None, :]
-                right_col = clean_arr[ry:ry2, tx if has_right else lx, :].astype(np.float32)[:, None, :]
-                alphas_x = np.linspace(0.0, 1.0, nx, dtype=np.float32)[None, :, None]
-                block = np.clip((1.0 - alphas_x) * left_col + alphas_x * right_col, 0.0, 255.0).astype(np.uint8)
+                left_col = np.zeros((ny, 3), dtype=np.float32)
+                right_col = np.zeros((ny, 3), dtype=np.float32)
+                x_starts = np.zeros(ny, dtype=np.float32)
+                x_ends = np.full(ny, float(nx - 1), dtype=np.float32)
+                is_gutter_row = np.zeros(ny, dtype=bool)
+
+                panel_gray = clean_arr.mean(axis=2)
+                panel_chroma = clean_arr.max(axis=2).astype(np.int16) - clean_arr.min(axis=2).astype(np.int16)
+                panel_white_rows = ((panel_gray >= 240.0) & (panel_chroma <= 18)).mean(axis=1)
+                top_gutter_y = 0
+                while top_gutter_y < int(h * 0.35) and panel_white_rows[top_gutter_y] >= 0.52:
+                    top_gutter_y += 1
+
+                for r_idx in range(ny):
+                    abs_y = ry + r_idx
+                    row_m = np.where(comp_mask_2d[r_idx])[0]
+                    if len(row_m) > 0:
+                        x_s, x_e = int(row_m[0]), int(row_m[-1])
+                        x_starts[r_idx] = float(x_s)
+                        x_ends[r_idx] = float(x_e)
+                        c_left = max(frame_pad, rx + x_s - 7) if has_left else min(w - frame_pad - 1, rx + x_e + 7)
+                        c_right = min(w - frame_pad - 1, rx + x_e + 7) if has_right else max(frame_pad, rx + x_s - 7)
+                    else:
+                        c_left = lx if has_left else tx
+                        c_right = tx if has_right else lx
+                    lc = clean_arr[abs_y, c_left].astype(np.float32)
+                    rc = clean_arr[abs_y, c_right].astype(np.float32)
+                    l_white = (lc.mean() >= 240.0) and ((lc.max() - lc.min()) <= 18.0)
+                    r_white = (rc.mean() >= 240.0) and ((rc.max() - rc.min()) <= 18.0)
+
+                    if abs_y < top_gutter_y and (l_white or r_white):
+                        is_gutter_row[r_idx] = True
+                        left_col[r_idx] = (255.0, 255.0, 255.0)
+                        right_col[r_idx] = (255.0, 255.0, 255.0)
+                        continue
+
+                    l_lum = float(lc.mean())
+                    r_lum = float(rc.mean())
+                    if abs(l_lum - r_lum) > 25.0 and max(l_lum, r_lum) >= 135.0:
+                        if l_lum > r_lum:
+                            rc = lc.copy()
+                        else:
+                            lc = rc.copy()
+
+                    left_col[r_idx] = lc
+                    right_col[r_idx] = rc
+
+                art_rows = np.where(~is_gutter_row)[0]
+                if len(art_rows) >= 5:
+                    ay1, ay2 = int(art_rows[0]), int(art_rows[-1]) + 1
+                    ky_col = max(7, min(61, ((ay2 - ay1) // 2) | 1))
+                    if ky_col % 2 == 0:
+                        ky_col += 1
+                    left_col[ay1:ay2] = cv2.GaussianBlur(left_col[ay1:ay2, None, :], (1, ky_col), 0)[:, 0, :]
+                    right_col[ay1:ay2] = cv2.GaussianBlur(right_col[ay1:ay2, None, :], (1, ky_col), 0)[:, 0, :]
+
+                grid_x = np.arange(nx, dtype=np.float32)[None, :]
+                span = np.maximum(1.0, (x_ends - x_starts)[:, None])
+                u_x = np.clip((grid_x - x_starts[:, None]) / span, 0.0, 1.0)[:, :, None]
+                block = np.clip((1.0 - u_x) * left_col[:, None, :] + u_x * right_col[:, None, :], 0.0, 255.0).astype(np.uint8)
+                block[is_gutter_row] = 255
+
+                if len(art_rows) >= 5:
+                    ay1, ay2 = int(art_rows[0]), int(art_rows[-1]) + 1
+                    kx = max(5, min(41, (nx // 3) | 1))
+                    ky = max(5, min(41, ((ay2 - ay1) // 3) | 1))
+                    if kx % 2 == 0:
+                        kx += 1
+                    if ky % 2 == 0:
+                        ky += 1
+                    block[ay1:ay2] = cv2.GaussianBlur(block[ay1:ay2], (kx, ky), 0)
             else:
                 top_row = clean_arr[top_y, rx:rx2, :].astype(np.float32)[None, :, :]
                 bot_row = clean_arr[bot_y, rx:rx2, :].astype(np.float32)[None, :, :]
@@ -167,12 +362,15 @@ def inpaint_panel_bubbles(
             sub_view = clean_arr[ry:ry2, rx:rx2]
             sub_view[comp_mask_2d] = block[comp_mask_2d]
 
-        # Smooth boundary transition ring via Telea inpainting
-        eroded = cv2.erode(mask, kernel, iterations=1)
-        boundary_ring = cv2.subtract(mask, eroded)
+        # Smooth boundary transition ring via Telea inpainting across a dilated/eroded collar
+        outer_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        inner_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        dil_m = cv2.dilate(mask, outer_k, iterations=1)
+        ero_m = cv2.erode(mask, inner_k, iterations=1)
+        boundary_ring = cv2.subtract(dil_m, ero_m)
         if np.any(boundary_ring > 0):
             bgr = cv2.cvtColor(clean_arr, cv2.COLOR_RGB2BGR)
-            inpainted_bgr = cv2.inpaint(bgr, boundary_ring, 5, cv2.INPAINT_TELEA)
+            inpainted_bgr = cv2.inpaint(bgr, boundary_ring, 9, cv2.INPAINT_TELEA)
             clean_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
         else:
             clean_rgb = clean_arr
@@ -199,48 +397,20 @@ def synthesize_speech_wav(
     emotion: str = "neutral",
     language: str = "ko",
     sample_rate: int = 24000,
+    genre_id: str = "shonen",
 ) -> float:
-    """Synthesizes a playable 16-bit PCM WAV file with cadence and pitch matching the speaker/emotion."""
-    clean_text = (text or "").strip()
-    duration_s = round(max(1.2, min(8.0, len(clean_text) * 0.065 + 0.6)), 2)
-    num_samples = int(duration_s * sample_rate)
-
-    base_freq = 165.0
-    if any(k in voice_id.lower() for k in ("elora", "female", "girl")):
-        base_freq = 235.0
-    elif any(k in voice_id.lower() for k in ("beast", "monster", "system")):
-        base_freq = 115.0
-
-    if emotion in ("angry", "urgent", "intense", "fierce"):
-        base_freq *= 1.12
-    elif emotion in ("sad", "tired", "relieved", "calm"):
-        base_freq *= 0.92
-
-    t = np.linspace(0.0, duration_s, num_samples, endpoint=False, dtype=np.float32)
-    syllable_env = 0.55 + 0.45 * np.sin(2.0 * math.pi * 4.5 * t)
-    fade_len = min(int(0.08 * sample_rate), num_samples // 4)
-    envelope = np.ones_like(t) * syllable_env
-    if fade_len > 0:
-        envelope[:fade_len] *= np.linspace(0.0, 1.0, fade_len, dtype=np.float32)
-        envelope[-fade_len:] *= np.linspace(1.0, 0.0, fade_len, dtype=np.float32)
-
-    wave_sig = (
-        0.60 * np.sin(2.0 * math.pi * base_freq * t)
-        + 0.25 * np.sin(2.0 * math.pi * (base_freq * 2.0) * t)
-        + 0.15 * np.sin(2.0 * math.pi * (base_freq * 3.0) * t)
+    """Synthesizes an expressive 16-bit PCM WAV speech file (Kokoro / multi-formant vocal synthesis)
+    normalized to the genre's EBU R128 dialogue LUFS target.
+    """
+    return synthesize_expressive_speech_wav(
+        text=text,
+        output_path=Path(output_path),
+        voice_id=voice_id,
+        emotion=emotion,
+        language=language,
+        genre_id=genre_id,
+        sample_rate=sample_rate,
     )
-    pcm = np.clip(wave_sig * envelope * 0.18 * 32767.0, -32767, 32767).astype(np.int16)
-
-    output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with wave.open(str(output_path), "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm.tobytes())
-
-    logger.info(f"Synthesized audio track {output_path} ({duration_s:.2f}s)")
-    return duration_s
 
 
 def burn_subtitle_on_frames(
@@ -557,22 +727,29 @@ def assemble_timeline(
     transition_frames: int = 8,
     audio_paths: Optional[List[Path]] = None,
     audio_events: Optional[List[Tuple[float, Path]]] = None,
+    transition_type: str = "crossfade",
+    genre_id: str = "shonen",
+    sfx_cues: Optional[List[Tuple[float, str, str]]] = None,
+    enable_cinematic_bgm: bool = True,
 ) -> Dict[str, Any]:
     """Assembles multiple panel clips into a single continuous video with transitions and audio."""
     if not clips:
         raise ValueError("No clips provided to assemble")
 
     full_timeline = list(clips[0])
+    cut_timestamps_s: List[float] = []
     for next_clip in clips[1:]:
         if transition_frames > 0 and len(full_timeline) >= transition_frames and len(next_clip) >= transition_frames:
+            cut_frame_idx = len(full_timeline) - (transition_frames // 2)
+            cut_timestamps_s.append(round(cut_frame_idx / float(max(1, fps)), 4))
             tail_a = full_timeline[-transition_frames:]
             del full_timeline[-transition_frames:]
             head_b = next_clip[:transition_frames]
-            for i in range(transition_frames):
-                alpha = float(i + 1) / float(transition_frames + 1)
-                full_timeline.append(Image.blend(tail_a[i], head_b[i], alpha))
+            blended = render_transition_frames(tail_a, head_b, transition_type=transition_type)
+            full_timeline.extend(blended)
             full_timeline.extend(next_clip[transition_frames:])
         else:
+            cut_timestamps_s.append(round(len(full_timeline) / float(max(1, fps)), 4))
             full_timeline.extend(next_clip)
 
     output_base_path = Path(output_base_path)
@@ -601,18 +778,41 @@ def assemble_timeline(
 
     total_duration_s = len(full_timeline) / float(max(1, fps))
 
-    # 3. Prepare mixed audio track (anchored to panel timestamps when audio_events is provided)
+    # 3. Prepare mixed audio track (with genre-adaptive BGM, transition SFX, and EBU R128 LUFS ducking)
     master_wav: Optional[Path] = None
+    audio_metrics: Dict[str, Any] = {}
     wav_out = output_base_path.with_name(output_base_path.stem + "_master_audio.wav")
+    metrics_out = output_base_path.parent / "audio_metrics.json"
+
+    resolved_events: List[Tuple[float, Path]] = []
     if audio_events:
-        master_wav = mix_timed_tracks(
-            events=audio_events,
+        resolved_events = [(float(s), Path(p)) for s, p in audio_events if p and Path(p).is_file()]
+    elif audio_paths:
+        cursor = 0.0
+        for p in audio_paths:
+            if p and Path(p).is_file():
+                try:
+                    with wave.open(str(p), "rb") as wf:
+                        dur = wf.getnframes() / float(max(1, wf.getframerate()))
+                    resolved_events.append((cursor, Path(p)))
+                    cursor += dur + 0.25
+                except Exception as e:
+                    logger.warning(f"Failed to read audio track {p}: {e}")
+
+    if enable_cinematic_bgm:
+        audio_metrics = mix_cinematic_soundtrack(
+            dialogue_events=resolved_events,
             total_duration_s=total_duration_s,
             output_wav_path=wav_out,
+            genre_id=genre_id,
+            cut_timestamps_s=cut_timestamps_s,
+            sfx_cues=sfx_cues,
+            metrics_output_path=metrics_out,
         )
-    elif audio_paths:
-        master_wav = concatenate_wav_tracks(
-            audio_paths=audio_paths,
+        master_wav = wav_out if wav_out.is_file() else None
+    elif resolved_events:
+        master_wav = mix_timed_tracks(
+            events=resolved_events,
             total_duration_s=total_duration_s,
             output_wav_path=wav_out,
         )
@@ -657,4 +857,9 @@ def assemble_timeline(
         "avi_path": str(avi_path.as_posix()),
         "webp_path": str(webp_path.as_posix()),
         "mp4_path": str(mp4_path.as_posix()) if has_mp4 else "",
+        "master_audio_path": str(master_wav.as_posix()) if master_wav and master_wav.exists() else "",
+        "audio_metrics_path": str(metrics_out.as_posix()) if metrics_out.exists() else "",
+        "audio_metrics": audio_metrics,
+        "transition_type": transition_type,
+        "genre_id": genre_id,
     }

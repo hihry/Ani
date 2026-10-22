@@ -409,6 +409,8 @@ def compute_clip_qc_metrics(
         src_candidates.append(src_tall.crop((x0, th - fh, x0 + fw, th)))
 
     src_bubbles = max(count_residual_text_bubbles(im) for im in src_candidates)
+    if first_frame_fidelity >= 0.88 and _detect_overlay_text_blocks(src_ref, first_frame) == 0:
+        src_bubbles = max(src_bubbles, count_residual_text_bubbles(first_frame))
     sample_indices = sorted({0, len(frames) // 4, len(frames) // 2, (3 * len(frames)) // 4, len(frames) - 1})
     max_frame_bubbles = 0
     for idx in sample_indices:

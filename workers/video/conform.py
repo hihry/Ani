@@ -138,8 +138,8 @@ def _resample_frames_exact(
 
     n_in = len(raw_frames)
     native_dur_s = n_in / float(max(1, native_fps))
-    # Max frames covered by 1.25x slow-mo of the generated clip
-    max_slowmo_frames = max(2, int(round(native_dur_s * 1.25 * target_fps)))
+    # Smoothly interpolate I2V frames up to 1.80x native duration before switching to damped tail drift
+    max_slowmo_frames = max(2, int(round(native_dur_s * 1.80 * target_fps)))
 
     active_target = min(expected_frames, max_slowmo_frames)
     resampled: List[Image.Image] = []
@@ -153,22 +153,27 @@ def _resample_frames_exact(
         else:
             resampled.append(Image.blend(raw_frames[i0], raw_frames[i1], float(alpha)))
 
-    # If duration_s > native_dur_s * 1.25, fill remaining tail with gentle damped drift on last frame
+    # If duration_s exceeds slow-mo range, continue smoothly from anchor (starting at scale=1.000 with zero jump)
     tail_needed = expected_frames - len(resampled)
     if tail_needed > 0:
         anchor = resampled[-1].copy()
         w, h = anchor.size
-        overscan = anchor.resize((int(round(w * 1.04)), int(round(h * 1.04))), Image.Resampling.BICUBIC)
-        ow, oh = overscan.size
-        max_dx = max(1, ow - w)
-        max_dy = max(1, oh - h)
         for t_idx in range(tail_needed):
-            # Smooth ease-out drift across the tail
             u = (t_idx + 1) / float(tail_needed)
             eased = 1.0 - (1.0 - u) ** 2
-            x0 = int(round(0.5 * max_dx * eased))
-            y0 = int(round(0.5 * max_dy * eased))
-            drifted = overscan.crop((x0, y0, x0 + w, y0 + h))
+            zoom = 1.0 + 0.03 * eased
+            crop_w = w / zoom
+            crop_h = h / zoom
+            cx = (w * 0.5) + (w * 0.008 * eased)
+            cy = (h * 0.5) - (h * 0.008 * eased)
+            x1 = max(0.0, min(float(w) - crop_w, cx - crop_w * 0.5))
+            y1 = max(0.0, min(float(h) - crop_h, cy - crop_h * 0.5))
+            drifted = anchor.transform(
+                (w, h),
+                Image.Transform.EXTENT,
+                (x1, y1, x1 + crop_w, y1 + crop_h),
+                Image.Resampling.BILINEAR,
+            )
             resampled.append(drifted)
 
     return resampled[:expected_frames]
