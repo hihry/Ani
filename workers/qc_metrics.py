@@ -52,21 +52,154 @@ def _spatial_subject_similarity(ref_im: Image.Image, frame_im: Image.Image) -> f
     # Central subject crop (inner 50% width x 50% height: [32:96, 32:96])
     tpl = frm_arr[32:96, 32:96, :]
     if cv2 is not None:
-        # Search across ref_arr with normalized cross-correlation so camera pan/zoom still matches
-        res = cv2.matchTemplate(ref_arr, tpl, cv2.TM_CCOEFF_NORMED)
-        best_ncc = float(np.max(res))
-        # Map [-1, 1] -> [0, 1]
+        best_ncc = -1.0
+        for s_tpl in (1.0, 0.94, 0.89):
+            ts = max(32, int(round(64 * s_tpl)))
+            tpl_s = cv2.resize(tpl, (ts, ts), interpolation=cv2.INTER_LINEAR) if ts != 64 else tpl
+            res = cv2.matchTemplate(ref_arr, tpl_s, cv2.TM_CCOEFF_NORMED)
+            best_ncc = max(best_ncc, float(np.max(res)))
         ncc_sim = max(0.0, min(1.0, 0.5 * (best_ncc + 1.0)))
     else:
         diff = float(np.mean(np.abs(ref_arr[32:96, 32:96, :] - tpl)))
         ncc_sim = max(0.0, 1.0 - 2.0 * diff)
 
-    # Also compare central crop color histogram to catch localized hue/identity swaps
     ref_center_hist = _hist_vec(Image.fromarray((ref_arr[24:104, 24:104, :] * 255.0).astype(np.uint8)))
     frm_center_hist = _hist_vec(Image.fromarray((tpl * 255.0).astype(np.uint8)))
     center_hist_sim = float(np.dot(ref_center_hist, frm_center_hist))
-
     return 0.55 * ncc_sim + 0.45 * center_hist_sim
+
+
+def _compute_temporal_anatomical_integrity(
+    frames: List[Image.Image],
+    src_overscan: Optional[Image.Image] = None,
+    src_img: Optional[Image.Image] = None,
+) -> float:
+    """Checks temporal anatomical/structural coherence across sampled frames relative to frame 0
+    and the overscan source plate (supporting both zoom_in and zoom_out camera trajectories).
+    Computes exact geometric active-panel bounds (excluding blurred letterbox bars on 720x1280
+    conformed clips), estimates the global 2D camera pan/zoom of the active artwork region,
+    and verifies an overlapping 5x4 sliding patch grid within +-15px (~14%) local deformation tolerance.
+    Catches localized face melting (panel_001) and hallucinated extra limbs/objects (panel_002)
+    on both raw and conformed letterboxed clips.
+    """
+    if cv2 is None or len(frames) < 4:
+        return 1.0
+    w_s, h_s = 256, 448
+    f0 = np.asarray(frames[0].convert("RGB").resize((w_s, h_s), Image.Resampling.BILINEAR), dtype=np.float32) / 255.0
+    search_planes = [f0]
+    if src_overscan is not None:
+        w_ov = int(round(w_s * 1.20))
+        ov_ar = float(src_overscan.height) / float(max(1, src_overscan.width))
+        frm_ar_hw = float(h_s) / float(w_s)
+        h_ov = max(int(round(h_s * 1.20)), int(round(w_ov * (ov_ar / max(0.5, frm_ar_hw)) * frm_ar_hw)))
+        h_ov = min(h_s * 4, h_ov)
+        f_ov = np.asarray(src_overscan.convert("RGB").resize((w_ov, h_ov), Image.Resampling.BILINEAR), dtype=np.float32) / 255.0
+        search_planes.append(f_ov)
+
+    ay1, ay2 = 16, h_s - 16
+    g0 = f0.mean(axis=2)
+    gx_f0 = np.abs(cv2.Sobel(g0, cv2.CV_32F, 1, 0, ksize=3))
+    if src_img is not None:
+        try:
+            from workers.render_kenburns import _trim_outer_white_gutters
+        except ImportError:
+            from render_kenburns import _trim_outer_white_gutters
+        trimmed = _trim_outer_white_gutters(src_img)
+        ar_src = float(trimmed.size[0]) / float(max(1, trimmed.size[1]))
+        fw, fh = frames[0].size
+        ar_frm = float(fw) / float(max(1, fh))
+        if ar_src > ar_frm * 1.08:
+            act_h = int(round(h_s * (ar_frm / ar_src)))
+            cand_ay1 = max(12, (h_s - act_h) // 2 + 8)
+            cand_ay2 = min(h_s - 12, (h_s + act_h) // 2 - 8)
+            if cand_ay2 - cand_ay1 >= 48 and cand_ay1 > 20 and cand_ay2 < h_s - 20:
+                inner_gx = float(np.mean(gx_f0[cand_ay1:cand_ay2, :]))
+                outer_gx = 0.5 * (
+                    float(np.mean(gx_f0[: cand_ay1 - 8, :]))
+                    + float(np.mean(gx_f0[cand_ay2 + 8 :, :]))
+                )
+                # Only narrow to letterbox viewport if outer bars are genuinely blurred letterbox bars
+                if outer_gx < inner_gx * 0.62:
+                    ay1, ay2 = cand_ay1, cand_ay2
+    else:
+        act = np.where(gx_f0.mean(axis=1) > 0.018)[0]
+        if len(act) > 50 and (int(act[-1]) - int(act[0])) >= 80:
+            ay1 = int(act[0]) + 14
+            ay2 = int(act[-1]) - 14
+
+    if ay2 - ay1 < 48:
+        return 1.0
+
+    # Restrict f0 search plane to active viewport + 24px margin so inner crops cannot jump into letterbox bars
+    f0_vy1 = max(0, ay1 - 24)
+    f0_vy2 = min(h_s, ay2 + 24)
+    search_planes[0] = f0[f0_vy1:f0_vy2, :]
+
+    indices = sorted(
+        {
+            max(1, len(frames) // 16),
+            max(1, len(frames) // 8),
+            max(1, (3 * len(frames)) // 16),
+            max(1, len(frames) // 4),
+            max(1, len(frames) // 2),
+            max(1, (3 * len(frames)) // 4),
+            len(frames) - 1,
+        }
+    )
+    worst_sim = 1.0
+    search_planes_half = [
+        (ref_b, cv2.resize(ref_b, (max(16, ref_b.shape[1] // 2), max(16, ref_b.shape[0] // 2)), interpolation=cv2.INTER_AREA))
+        for ref_b in search_planes
+    ]
+    for idx in indices:
+        fk = np.asarray(frames[idx].convert("RGB").resize((w_s, h_s), Image.Resampling.BILINEAR), dtype=np.float32) / 255.0
+        fk_act = fk[ay1:ay2, 16 : w_s - 16]
+        ah_k, aw_k, _ = fk_act.shape
+        fk_act_half = cv2.resize(fk_act, (max(16, aw_k // 2), max(16, ah_k // 2)), interpolation=cv2.INTER_AREA)
+        ah_h, aw_h, _ = fk_act_half.shape
+        best_g_ncc = -1.0
+        best_aligned_ref = f0[ay1:ay2, 16 : w_s - 16]
+        for ref_base, ref_half in search_planes_half:
+            rh, rw, _ = ref_base.shape
+            rh_h, rw_h, _ = ref_half.shape
+            for s in (1.18, 1.12, 1.06, 1.0, 0.97, 0.94, 0.91, 0.88, 0.85):
+                tw_h = max(16, min(rw_h, int(round(aw_h * s))))
+                th_h = max(16, min(rh_h, int(round(ah_h * s))))
+                tpl_g = cv2.resize(fk_act_half, (tw_h, th_h), interpolation=cv2.INTER_LINEAR)
+                res_g = cv2.matchTemplate(ref_half, tpl_g, cv2.TM_CCOEFF_NORMED)
+                _, mv, _, ml = cv2.minMaxLoc(res_g)
+                if float(mv) > best_g_ncc:
+                    best_g_ncc = float(mv)
+                    tw = max(32, min(rw, int(round(aw_k * s))))
+                    th = max(32, min(rh, int(round(ah_k * s))))
+                    mx = max(0, min(rw - tw, int(round(ml[0] * (rw / float(rw_h))))))
+                    my = max(0, min(rh - th, int(round(ml[1] * (rh / float(rh_h))))))
+                    best_aligned_ref = cv2.resize(
+                        ref_base[my : my + th, mx : mx + tw], (aw_k, ah_k), interpolation=cv2.INTER_LINEAR
+                    )
+
+        pad = 10
+        padded_ref = cv2.copyMakeBorder(best_aligned_ref, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+        pw, ph = max(16, aw_k // 5), max(16, ah_k // 4)
+        sy_step = max(8, (ah_k - ph) // 5)
+        sx_step = max(8, (aw_k - pw) // 6)
+        for y1 in range(0, ah_k - ph + 1, sy_step):
+            for x1 in range(0, aw_k - pw + 1, sx_step):
+                p_fk = fk_act[y1 : y1 + ph, x1 : x1 + pw]
+                if float(np.std(p_fk)) < 0.052:
+                    continue
+                win_ref = padded_ref[y1 : y1 + ph + 2 * pad, x1 : x1 + pw + 2 * pad]
+                res_p = cv2.matchTemplate(win_ref, p_fk, cv2.TM_CCOEFF_NORMED)
+                _, p_ncc, _, p_loc = cv2.minMaxLoc(res_p)
+                px, py = int(p_loc[0]), int(p_loc[1])
+                diff_p = np.abs(win_ref[py : py + ph, px : px + pw] - p_fk)
+                p_mae = float(np.mean(diff_p))
+                p_p90 = float(np.percentile(diff_p, 90))
+                if float(p_ncc) < 0.45 and (p_mae >= 0.058 or p_p90 >= 0.15):
+                    p_sim = max(0.0, min(0.55, 0.5 * (float(p_ncc) + 1.0) - 2.5 * max(0.0, p_mae - 0.04)))
+                    worst_sim = min(worst_sim, p_sim)
+
+    return worst_sim
 
 
 def _compute_ssim_rgb(im_a: Image.Image, im_b: Image.Image) -> float:
@@ -232,8 +365,10 @@ def compute_clip_qc_metrics(
 
     src_img = Image.open(source_image_path).convert("RGB")
     first_frame = frames[0].convert("RGB")
-    last_frame = frames[-1].convert("RGB")
+    q1_frame = frames[len(frames) // 5].convert("RGB")
     mid_frame = frames[len(frames) // 2].convert("RGB")
+    q3_frame = frames[(4 * len(frames)) // 5].convert("RGB")
+    last_frame = frames[-1].convert("RGB")
 
     src_ref = src_img
     src_overscan = src_img
@@ -266,27 +401,30 @@ def compute_clip_qc_metrics(
     )
     sim_temporal = float(0.5 * np.dot(v_first, v_last) + 0.5 * np.dot(v_first, v_mid))
 
-    # Central subject structural similarity (catches face swaps / middle-crop corruption)
-    subj_sim_mid = max(
-        _spatial_subject_similarity(src_ref, mid_frame),
-        _spatial_subject_similarity(src_overscan_120, mid_frame),
-        _spatial_subject_similarity(first_frame, mid_frame),
-    )
-    subj_sim_last = max(
-        _spatial_subject_similarity(src_ref, last_frame),
-        _spatial_subject_similarity(src_overscan_120, last_frame),
-        _spatial_subject_similarity(first_frame, last_frame),
-    )
+    def _frame_subj_sim(frm: Image.Image) -> float:
+        return max(
+            _spatial_subject_similarity(src_ref, frm),
+            _spatial_subject_similarity(src_overscan_120, frm),
+            _spatial_subject_similarity(first_frame, frm),
+        )
+
+    subj_sim_q1 = _frame_subj_sim(q1_frame)
+    subj_sim_mid = _frame_subj_sim(mid_frame)
+    subj_sim_q3 = _frame_subj_sim(q3_frame)
+    subj_sim_last = _frame_subj_sim(last_frame)
     subj_sim_src = max(
         _spatial_subject_similarity(src_ref, first_frame),
         _spatial_subject_similarity(src_overscan, first_frame),
         _spatial_subject_similarity(src_overscan_120, first_frame),
         _spatial_subject_similarity(src_img, first_frame),
     )
-    subj_sim = min(subj_sim_src, 0.5 * (subj_sim_mid + subj_sim_last))
+    anatomical_sim = _compute_temporal_anatomical_integrity(
+        frames, src_overscan=src_tall, src_img=src_img
+    )
+    subj_sim = min(subj_sim_src, subj_sim_q1, subj_sim_mid, subj_sim_q3, subj_sim_last, anatomical_sim)
 
     raw_identity = 0.40 * sim_palette_src + 0.25 * sim_temporal + 0.35 * subj_sim
-    # If either global palette or central subject was severely corrupted, cap identity_similarity
+    # If either global palette or subject/anatomical integrity was severely corrupted, cap identity_similarity
     if sim_palette_src < 0.55 or subj_sim < 0.62:
         raw_identity = min(raw_identity, min(sim_palette_src, subj_sim))
     identity_similarity = round(float(np.clip(raw_identity, 0.0, 1.0)), 4)
@@ -310,14 +448,29 @@ def compute_clip_qc_metrics(
             np.asarray(f.resize((160, 284), Image.Resampling.BILINEAR).convert("L"), dtype=np.float32) / 255.0
             for f in sampled_pil
         ]
+        # When a wide panel is letterboxed into a 9:16 frame, measure motion on the active panel viewport
+        try:
+            from workers.render_kenburns import _trim_outer_white_gutters
+        except ImportError:
+            from render_kenburns import _trim_outer_white_gutters
+        tr_m = _trim_outer_white_gutters(src_img)
+        ar_src_m = float(tr_m.width) / float(max(1, tr_m.height))
+        ar_frm_m = float(first_frame.width) / float(max(1, first_frame.height))
+        if ar_src_m > ar_frm_m * 1.18:
+            act_h_m = max(48, min(284, int(round(284 * (ar_frm_m / ar_src_m)))))
+            ym0 = max(0, (284 - act_h_m) // 2)
+            ym1 = min(284, ym0 + act_h_m)
+        else:
+            ym0, ym1 = 0, 284
+
         deltas = [
-            float(np.mean(np.abs(sampled_gray[i + 1] - sampled_gray[i])))
+            float(np.mean(np.abs(sampled_gray[i + 1][ym0:ym1, :] - sampled_gray[i][ym0:ym1, :])))
             for i in range(len(sampled_gray) - 1)
         ]
         flicker_std = float(np.std(deltas))
 
         # Check sign-alternating brightness oscillation (strobe/flicker)
-        lum_means = [float(np.mean(g)) for g in sampled_gray]
+        lum_means = [float(np.mean(g[ym0:ym1, :])) for g in sampled_gray]
         lum_diffs = np.diff(lum_means)
         sign_flips = 0
         for i in range(len(lum_diffs) - 1):
@@ -340,7 +493,7 @@ def compute_clip_qc_metrics(
                     iterations=2, poly_n=5, poly_sigma=1.1, flags=0,
                 )
                 mag = np.sqrt(flow[:, :, 0] ** 2 + flow[:, :, 1] ** 2)
-                flow_mags.append(float(np.mean(mag)))
+                flow_mags.append(float(np.mean(mag[ym0:ym1, :])))
 
                 # Warp g0 toward g1 using inverse flow mapping: g1(x, y) ~ g0(x - dx, y - dy)
                 map_x = grid_x - flow[:, :, 0]

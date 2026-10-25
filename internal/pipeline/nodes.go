@@ -716,6 +716,18 @@ func GenerateNode(ctx context.Context, state *model.RunState, cfg *config.Pipeli
 		comfyURL = cfg.Generation.ComfyURL
 	}
 
+	routedModels := make(map[string]string)
+	if planBytes, err := os.ReadFile(filepath.Join(runDir, "routes", "routing_plan.json")); err == nil {
+		var plan RoutingPlan
+		if json.Unmarshal(planBytes, &plan) == nil {
+			for _, dec := range plan.Panels {
+				if dec.PanelID != "" && dec.ModelID != "" {
+					routedModels[dec.PanelID] = dec.ModelID
+				}
+			}
+		}
+	}
+
 	type genResult struct {
 		cand      model.ClipCandidate
 		routeUsed model.AnimationRoute
@@ -763,6 +775,9 @@ func GenerateNode(ctx context.Context, state *model.RunState, cfg *config.Pipeli
 		modelID := string(p.Route)
 		if p.Route == model.RouteI2V {
 			modelID = primaryModel
+			if rm := routedModels[p.PanelID]; rm != "" && rm != string(model.RouteParallax) && rm != string(model.RouteKenBurns) {
+				modelID = rm
+			}
 		}
 		emotion := "neutral"
 		if len(p.Dialogue) > 0 && p.Dialogue[0].Emotion != "" {

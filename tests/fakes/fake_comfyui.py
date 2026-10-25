@@ -50,6 +50,7 @@ ALL_KNOWN_NODES = [
     "LTXVImgToVideo",
     "HunyuanImageToVideo",
     "RandomNoise",
+    "ModelSamplingSD3",
     "KSampler",
     "KSamplerAdvanced",
     "VAEDecode",

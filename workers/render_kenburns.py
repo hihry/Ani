@@ -38,27 +38,28 @@ def _trim_outer_white_gutters(img: Image.Image) -> Image.Image:
     row_white_ratio = is_white.mean(axis=1)
     top = 0
     max_top = int(h * 0.35)
-    while top < max_top and row_white_ratio[top] >= 0.85:
+    while top < max_top and (row_white_ratio[top] >= 0.70 and gray[top].mean() >= 238.0):
         top += 1
-    if top >= 20:
-        border_scan = min(h - 16, top + 6)
+    if top >= 4:
+        border_scan = min(h - 16, top + 12)
         for r in range(top, border_scan):
-            if gray[r].mean() < 95.0:
+            if gray[r].mean() < 115.0:
                 top = r + 1
     else:
         top = 0
+    while top < min(h - 32, top + 6) and gray[top].mean() < 35.0 and gray[top].std() < 25.0:
+        top += 1
 
     bot = h
     min_bot = int(h * 0.65)
-    while bot > min_bot and row_white_ratio[bot - 1] >= 0.85:
+    while bot > min_bot and (row_white_ratio[bot - 1] >= 0.70 and gray[bot - 1].mean() >= 235.0):
         bot -= 1
-    if (h - bot) >= 20:
-        border_scan = max(top + 16, bot - 6)
-        for r in range(bot - 1, border_scan - 1, -1):
-            if gray[r].mean() < 95.0:
-                bot = r
-    else:
-        bot = h
+    border_scan = max(top + 16, bot - 10)
+    for r in range(bot - 1, border_scan - 1, -1):
+        if gray[r].mean() < 105.0 and gray[r].std() < 65.0:
+            bot = r
+    while bot > max(top + 32, bot - 6) and gray[bot - 1].mean() < 35.0 and gray[bot - 1].std() < 25.0:
+        bot -= 1
 
     if (bot - top) >= int(h * 0.55) and (top > 0 or bot < h):
         return img.crop((0, top, w, bot))
@@ -135,10 +136,27 @@ def prepare_cinematic_canvas(
         bg_canvas.paste(bot_fill, (0, max(0, paste_y + fg_h - 24)))
     bg_canvas.paste(fg_img, (0, paste_y))
     bg_crop = bg_canvas.filter(ImageFilter.GaussianBlur(radius=22))
-    bg_crop = ImageEnhance.Brightness(bg_crop).enhance(0.58)
 
-    # Soft vertical edge feather so the panel blends into the atmospheric extension without harsh borders
-    feather_px = max(6, min(28, fg_h // 14))
+    # Apply darkening strictly outside the active panel (in the letterbox bars) with a smooth ramp
+    # so the active panel interior never gets a dark horizontal shadow band across its top/bottom edges.
+    bg_arr = np.asarray(bg_crop, dtype=np.float32)
+    gain_1d = np.ones(canvas_h, dtype=np.float32)
+    ramp_len = min(28, max(8, paste_y))
+    if paste_y > 0:
+        gain_1d[:paste_y] = 0.58
+        if ramp_len > 0:
+            gain_1d[paste_y - ramp_len : paste_y] = np.linspace(0.58, 0.96, ramp_len, dtype=np.float32)
+    bot_start = paste_y + fg_h
+    if bot_start < canvas_h:
+        gain_1d[bot_start:] = 0.58
+        bot_ramp = min(28, canvas_h - bot_start)
+        if bot_ramp > 0:
+            gain_1d[bot_start : bot_start + bot_ramp] = np.linspace(0.96, 0.58, bot_ramp, dtype=np.float32)
+    bg_arr = np.clip(bg_arr * gain_1d[:, None, None], 0.0, 255.0).astype(np.uint8)
+    bg_crop = Image.fromarray(bg_arr, mode="RGB")
+
+    # Micro 5px anti-aliased edge feather so the panel joins the atmospheric extension with zero dark band
+    feather_px = min(5, max(2, fg_h // 64))
     alpha_1d = np.ones(fg_h, dtype=np.float32)
     ramp = np.linspace(0.0, 1.0, feather_px, dtype=np.float32)
     alpha_1d[:feather_px] = ramp

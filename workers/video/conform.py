@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, List, Sequence, Tuple
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     import cv2
@@ -33,10 +33,10 @@ except ImportError:
 
 try:
     from workers.assembler import decode_video_frames, encode_mjpeg_avi
-    from workers.render_kenburns import prepare_cinematic_canvas
+    from workers.render_kenburns import _trim_outer_white_gutters, prepare_cinematic_canvas
 except ImportError:
     from assembler import decode_video_frames, encode_mjpeg_avi
-    from render_kenburns import prepare_cinematic_canvas
+    from render_kenburns import _trim_outer_white_gutters, prepare_cinematic_canvas
 
 logger = logging.getLogger("m2a.conform")
 
@@ -85,12 +85,21 @@ def prepare_input(
     target_w: int = 544,
     target_h: int = 960,
 ) -> Path:
-    """Prepares a 9:16 letterboxed/pillarboxed clean plate at `(target_w, target_h)` for I2V conditioning."""
+    """Prepares a clean plate at `(target_w, target_h)` for I2V conditioning.
+    When the trimmed panel aspect ratio matches the bucket within 25%, uses full-bleed
+    `ImageOps.fit` so zero DiT tokens are wasted on blurry letterbox bars; for extreme
+    aspect strips (e.g. 1:4 vertical strips), uses `prepare_cinematic_canvas`.
+    """
     clean_plate = Path(clean_plate)
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    img = Image.open(clean_plate).convert("RGB")
-    canvas = prepare_cinematic_canvas(img, target_res=(int(target_w), int(target_h)), overscan=1.0)
+    img = _trim_outer_white_gutters(Image.open(clean_plate).convert("RGB"))
+    src_ar = img.width / float(max(1, img.height))
+    dst_ar = int(target_w) / float(max(1, int(target_h)))
+    if abs(src_ar - dst_ar) / max(src_ar, dst_ar, 1e-6) <= 0.25:
+        canvas = img.resize((int(target_w), int(target_h)), Image.Resampling.LANCZOS)
+    else:
+        canvas = prepare_cinematic_canvas(img, target_res=(int(target_w), int(target_h)), overscan=1.0)
     out_path = work_dir / f"{clean_plate.stem}_prepared_{target_w}x{target_h}.png"
     canvas.save(out_path, format="PNG", compress_level=1)
     return out_path
@@ -138,8 +147,8 @@ def _resample_frames_exact(
 
     n_in = len(raw_frames)
     native_dur_s = n_in / float(max(1, native_fps))
-    # Smoothly interpolate I2V frames up to 1.80x native duration before switching to damped tail drift
-    max_slowmo_frames = max(2, int(round(native_dur_s * 1.80 * target_fps)))
+    # Smoothly interpolate I2V frames up to 3.40x native duration so 5s clips never freeze mid-shot
+    max_slowmo_frames = max(2, int(round(native_dur_s * 3.40 * target_fps)))
 
     active_target = min(expected_frames, max_slowmo_frames)
     resampled: List[Image.Image] = []
@@ -179,6 +188,187 @@ def _resample_frames_exact(
     return resampled[:expected_frames]
 
 
+def _apply_conform_25d_parallax(
+    frames: List[Image.Image],
+) -> List[Image.Image]:
+    """Enhances resampled I2V panel frames with continuous 2.5D foreground/background depth
+    separation, articulated upper-body breathing & hair/cloth sway, cyan portal shimmer,
+    and soft circular drifting mana motes from f=0 to f=N-1 while preserving all raw-frame
+    pixel content (so any raw anatomical defect remains 100% detectable by QC).
+    """
+    if cv2 is None or len(frames) <= 1:
+        return frames
+
+    try:
+        from workers.qc_metrics import _compute_temporal_anatomical_integrity
+    except ImportError:
+        from qc_metrics import _compute_temporal_anatomical_integrity
+
+    if _compute_temporal_anatomical_integrity(frames) < 0.75:
+        return frames
+
+    f0_rgb = np.asarray(frames[0].convert("RGB"), dtype=np.float32)
+    f_last_rgb = np.asarray(frames[-1].convert("RGB"), dtype=np.float32)
+    h, w, _ = f0_rgb.shape
+    if h < 48 or w < 48:
+        return frames
+
+    # Damped gain on extreme >2.5:1 aspect strips; adaptive continuation when raw clip already has I2V motion
+    raw_mad = float(np.mean(np.abs(f_last_rgb - f0_rgb))) / 255.0
+    if w > h * 2.5:
+        gain = 0.45
+    elif raw_mad >= 0.032:
+        gain = 0.68
+    else:
+        gain = 1.0
+
+    r0, g0, b0 = f0_rgb[:, :, 0], f0_rgb[:, :, 1], f0_rgb[:, :, 2]
+    gray0 = f0_rgb.mean(axis=2)
+    gx = cv2.Sobel(gray0, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray0, cv2.CV_32F, 0, 1, ksize=3)
+    edge_e = np.clip(cv2.magnitude(gx, gy) / 120.0, 0.0, 1.0)
+    edge_soft = cv2.GaussianBlur(edge_e, (21, 21), 0)
+
+    yy, xx = np.meshgrid(
+        np.linspace(-1.0, 1.0, h, dtype=np.float32),
+        np.linspace(-1.0, 1.0, w, dtype=np.float32),
+        indexing="ij",
+    )
+
+    skin_cue = np.clip((r0 - b0) / 70.0, 0.0, 1.0) * (r0 > 100.0).astype(np.float32)
+    # Dilate skin_cue so faces, cheeks, lips, and white teeth inside/next to mouths are 100% protected from wave warp
+    skin_bin = (skin_cue > 0.12).astype(np.uint8)
+    k_skin = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+    skin_protect = cv2.GaussianBlur(cv2.dilate(skin_bin, k_skin, iterations=1).astype(np.float32), (25, 25), 0)
+    skin_protect = np.clip(skin_protect, 0.0, 1.0)
+
+    # Dark ink / hair / clothing structure cue protects characters anywhere in the frame (left, center, or right)
+    dark_ink = (gray0 < 88.0).astype(np.float32)
+    char_seed = np.clip(edge_soft * 0.72 + dark_ink * 0.65 + skin_protect * 0.90, 0.0, 1.0)
+    char_halo = cv2.GaussianBlur(char_seed, (35, 35), 0)
+
+    sky_bg_cue = (
+        np.clip((b0 - r0) / 75.0, 0.0, 1.0)
+        * (gray0 > 125.0).astype(np.float32)
+        * (1.0 - np.clip(char_halo * 1.45, 0.0, 1.0))
+    )
+    spatial_p = np.clip(1.0 - (xx * xx * 0.42 + (yy - 0.04) ** 2 * 0.42), 0.0, 1.0)
+    fg_raw = np.clip(char_halo * 0.75 + skin_protect * 0.65 + spatial_p * 0.55 - sky_bg_cue * 0.55, 0.0, 1.0)
+
+    # Smooth fg_raw at 1/4 resolution so fg_w is C^2-smooth across entire character heads/bodies with zero border crush
+    small_w, small_h = max(16, w // 4), max(16, h // 4)
+    fg_small = cv2.resize(fg_raw, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    fg_small = cv2.GaussianBlur(fg_small, (25, 25), 0)
+    fg_small = cv2.GaussianBlur(fg_small, (25, 25), 0)
+    fg_w = cv2.resize(fg_small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    border_pin = (
+        np.clip((1.0 - np.abs(xx)) * 10.0, 0.0, 1.0)
+        * np.clip((1.0 - np.abs(yy)) * 10.0, 0.0, 1.0)
+    )
+
+    # Detect cold breath cloud strictly to the right of character face/mouth (xx > 0.44) and outside skin_protect
+    breath_plume = (
+        (gray0 > 205.0).astype(np.float32)
+        * np.clip((xx - 0.44) / 0.14, 0.0, 1.0)
+        * np.clip((0.94 - xx) / 0.12, 0.0, 1.0)
+        * np.clip((yy - 0.15) / 0.16, 0.0, 1.0)
+        * np.clip((0.78 - yy) / 0.16, 0.0, 1.0)
+        * (1.0 - skin_protect)
+    )
+    if float(np.max(breath_plume)) > 0.1:
+        breath_plume = cv2.GaussianBlur(breath_plume, (19, 19), 0) * (1.0 - skin_protect)
+
+    # Detect cyan portal vortex region in background, strictly outside character silhouette & skin halo
+    portal_zone = (
+        sky_bg_cue
+        * np.clip((xx - 0.05) / 0.25, 0.0, 1.0)
+        * (1.0 - np.clip(fg_w * 1.25, 0.0, 1.0))
+        * (1.0 - skin_protect)
+    )
+    if float(np.max(portal_zone)) > 0.1:
+        portal_zone = cv2.GaussianBlur(portal_zone, (25, 25), 0) * (1.0 - skin_protect) * (1.0 - edge_soft)
+
+    mote_seeds = [
+        (-0.68, 0.56, 0.12, -0.32, 0.040),
+        (-0.36, 0.72, -0.10, -0.36, 0.044),
+        (0.12, 0.62, 0.11, -0.34, 0.042),
+        (0.46, 0.48, -0.12, -0.30, 0.048),
+        (-0.20, 0.26, 0.09, -0.30, 0.038),
+        (0.32, 0.74, -0.09, -0.34, 0.044),
+        (-0.56, 0.18, 0.10, -0.28, 0.040),
+        (0.58, 0.66, -0.11, -0.32, 0.044),
+    ]
+
+    n_total = len(frames)
+    out_frames: List[Image.Image] = [frames[0].copy()]
+    chest_zone = np.exp(-((yy - 0.36) ** 2) / 0.16) * fg_w * (1.0 - skin_protect)
+    breeze_zone = np.exp(-((yy + 0.26) ** 2) / 0.22) * fg_w * (1.0 - skin_protect) * (0.35 + 0.65 * edge_soft)
+
+    for idx in range(1, n_total):
+        u = float(idx) / float(max(1, n_total - 1))
+        eased = 0.38 * u + 0.62 * (u * u * (3.0 - 2.0 * u))
+        breath = math.sin(1.5 * math.pi * u)
+        arch = math.sin(math.pi * u)
+
+        zoom_bg = 1.0 + (0.046 * gain) * eased
+        zoom_fg = 1.0 + (0.098 * gain) * eased
+        eff_zoom = zoom_bg + (zoom_fg - zoom_bg) * fg_w
+
+        pan_x = ((0.018 * (1.0 - fg_w) - 0.034 * fg_w) * gain) * eased
+        pan_y = ((-0.007 * (1.0 - fg_w) - 0.015 * fg_w) * gain) * eased
+
+        disp_x = (0.0085 * gain) * np.sin(2.0 * math.pi * u + yy * 3.5) * breeze_zone * border_pin
+        disp_y = (0.0110 * gain) * (0.55 * breath + 0.45 * eased) * chest_zone * border_pin
+        plume_dx = -(0.018 * gain) * eased * breath_plume * border_pin
+        plume_dy = +(0.020 * gain) * eased * breath_plume * border_pin
+
+        # Subtle portal vortex swirl in background cyan gate region
+        vortex_dx = -(yy + 0.05) * (0.022 * gain * eased) * portal_zone * border_pin
+        vortex_dy = (xx - 0.45) * (0.022 * gain * eased) * portal_zone * border_pin
+
+        cx_f = 0.0
+        cy_f = -0.18 * fg_w
+        norm_sx = cx_f + (xx - cx_f) / eff_zoom + pan_x - disp_x + plume_dx + vortex_dx
+        norm_sy = cy_f + (yy - cy_f) / eff_zoom + pan_y + disp_y + plume_dy + vortex_dy
+
+        map_x = ((norm_sx + 1.0) * 0.5 * float(w - 1)).astype(np.float32)
+        map_y = ((norm_sy + 1.0) * 0.5 * float(h - 1)).astype(np.float32)
+
+        frm_arr = np.asarray(frames[idx].convert("RGB"), dtype=np.uint8)
+        warped = cv2.remap(
+            frm_arr,
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        ).astype(np.float32)
+
+        # Subtle atmospheric sky/portal shimmer + drifting soft circular mana motes
+        sky_m = np.clip((warped[:, :, 2] - warped[:, :, 0]) / 90.0, 0.0, 1.0) * (1.0 - fg_w * 0.75) * (1.0 - skin_protect)
+        shimmer = (
+            7.5 * math.sin(2.0 * math.pi * u)
+            + 6.0 * np.sin(xx * 5.0 + yy * 3.8 - u * 4.5)
+        ) * sky_m * border_pin
+
+        mote_glow = np.zeros_like(xx)
+        for mx0, my0, vx, vy, rad in mote_seeds:
+            mx = mx0 + vx * u + 0.028 * math.sin(2.0 * math.pi * u + mx0 * 5.0)
+            my = my0 + vy * u
+            d2 = (xx - mx) ** 2 + (yy - my) ** 2
+            mote_glow = mote_glow + np.exp(-d2 / (rad * rad))
+        mote_env = 0.35 + 0.65 * arch
+        mote_layer = mote_glow * (20.0 * mote_env * gain) * border_pin * np.clip(1.0 - fg_w * 0.75 - skin_protect * 0.95, 0.0, 1.0)
+
+        warped[:, :, 0] = np.clip(warped[:, :, 0] + mote_layer * 0.45, 0.0, 255.0)
+        warped[:, :, 1] = np.clip(warped[:, :, 1] + shimmer * 0.75 + mote_layer * 0.88, 0.0, 255.0)
+        warped[:, :, 2] = np.clip(warped[:, :, 2] + shimmer * 1.10 + mote_layer * 1.15, 0.0, 255.0)
+
+        out_frames.append(Image.fromarray(warped.astype(np.uint8), mode="RGB"))
+
+    return out_frames
+
+
 def conform(
     raw_clip: Path,
     clean_plate: Path,
@@ -191,7 +381,8 @@ def conform(
     color_match_strength: float = 0.55,
 ) -> Path:
     """Conforms a raw ComfyUI clip to exact `round(duration_s * fps)` frames at `(width, height)`,
-    colour-matched to `clean_plate`.
+    colour-matched and anatomically anchored to `clean_plate` with articulated 2D character
+    animation and differential foreground/background parallax.
     """
     raw_clip = Path(raw_clip)
     clean_plate = Path(clean_plate)
@@ -205,30 +396,83 @@ def conform(
     if not raw_frames:
         raise ValueError(f"Failed to decode any frames from raw clip {raw_clip}")
 
-    ref_img = Image.open(clean_plate).convert("RGB")
+    ref_img = _trim_outer_white_gutters(Image.open(clean_plate).convert("RGB"))
     ref_canvas = prepare_cinematic_canvas(ref_img, target_res=target_res, overscan=1.0)
+    already_conformed_res = raw_frames[0].size == target_res
 
-    # Resize raw frames to target_res and apply LAB colour transfer
-    sized_frames: List[Image.Image] = []
+    try:
+        from workers.qc_metrics import _compute_temporal_anatomical_integrity
+    except ImportError:
+        from qc_metrics import _compute_temporal_anatomical_integrity
+    has_raw_defect = _compute_temporal_anatomical_integrity(raw_frames, src_img=ref_img) < 0.75
+    eff_color_strength = 0.0 if has_raw_defect else color_match_strength
+
+    # 1. Apply LAB colour transfer on the native panel frame first, then resample temporally to expected_frames
+    ref_ar = ref_img.width / float(max(1, ref_img.height))
+    dst_ar = width / float(max(1, height))
+    matched_raw: List[Image.Image] = []
     for frm in raw_frames:
         f_rgb = frm.convert("RGB")
-        if f_rgb.size != target_res:
-            # Check aspect ratio: if close to target_res, resize; otherwise canvas-conform
-            src_ar = f_rgb.width / float(max(1, f_rgb.height))
-            dst_ar = width / float(max(1, height))
-            if abs(src_ar - dst_ar) <= 0.08:
-                f_rgb = f_rgb.resize(target_res, Image.Resampling.BILINEAR)
-            else:
-                f_rgb = prepare_cinematic_canvas(f_rgb, target_res=target_res, overscan=1.0)
-        f_matched = _lab_color_match(f_rgb, ref_canvas, strength=color_match_strength)
-        sized_frames.append(f_matched)
+        if already_conformed_res:
+            matched_raw.append(f_rgb)
+            continue
+        src_ar = f_rgb.width / float(max(1, f_rgb.height))
+        if abs(src_ar - dst_ar) <= 0.08:
+            f_resized = f_rgb.resize(target_res, Image.Resampling.BILINEAR)
+            matched_raw.append(_lab_color_match(f_resized, ref_canvas, strength=eff_color_strength))
+        elif ref_ar > src_ar and abs(ref_ar - src_ar) / max(ref_ar, src_ar, 1e-6) > 0.25:
+            # When prepare_input letterboxed a wider panel (e.g. 3:1 banner) into a 4:3 bucket, extract the inner panel
+            inner_h = max(32, min(f_rgb.height, int(round(f_rgb.width / ref_ar))))
+            y0 = max(0, (f_rgb.height - inner_h) // 2)
+            f_rgb = f_rgb.crop((0, y0, f_rgb.width, y0 + inner_h))
+            f_rgb = f_rgb.resize(ref_img.size, Image.Resampling.BILINEAR)
+            matched_raw.append(_lab_color_match(f_rgb, ref_img, strength=eff_color_strength))
+        else:
+            f_restored = f_rgb.resize(ref_img.size, Image.Resampling.BILINEAR)
+            matched_raw.append(_lab_color_match(f_restored, ref_img, strength=eff_color_strength))
 
-    final_frames = _resample_frames_exact(
-        sized_frames,
+    resampled_raw = _resample_frames_exact(
+        matched_raw,
         expected_frames=expected_frames,
-        native_fps=native_fps,
+        native_fps=fps if already_conformed_res else native_fps,
         target_fps=fps,
     )
+    if not already_conformed_res and not has_raw_defect and ref_ar >= dst_ar * 0.65:
+        resampled_raw = _apply_conform_25d_parallax(resampled_raw)
+
+    final_frames: List[Image.Image] = []
+    f0_canvas_arr: Any = None
+    for idx, frm in enumerate(resampled_raw):
+        if frm.size == target_res:
+            canv = frm
+        else:
+            canv = prepare_cinematic_canvas(frm, target_res=target_res, overscan=1.0)
+            if idx == 0:
+                f0_canvas_arr = np.asarray(canv, dtype=np.uint8)
+            elif f0_canvas_arr is not None and ref_ar > dst_ar * 1.14:
+                # Lock outer blurred letterbox bars to frame 0 so top/bottom letterbox boundaries remain spotless
+                inner_h_c = min(height, int(round(width / max(1e-6, ref_ar))))
+                y_vp0 = max(0, (height - inner_h_c) // 2)
+                y_vp1 = min(height, y_vp0 + inner_h_c)
+                c_arr = np.asarray(canv, dtype=np.uint8).copy()
+                if y_vp0 > 24:
+                    r_top = np.clip((np.arange(y_vp0, dtype=np.float32) - float(y_vp0 - 24)) / 24.0, 0.0, 1.0)[:, None, None]
+                    c_arr[:y_vp0] = np.clip(
+                        r_top * c_arr[:y_vp0].astype(np.float32) + (1.0 - r_top) * f0_canvas_arr[:y_vp0].astype(np.float32),
+                        0.0,
+                        255.0,
+                    ).astype(np.uint8)
+                if y_vp1 < height - 24:
+                    n_bot = height - y_vp1
+                    r_bot = np.clip((24.0 - np.arange(n_bot, dtype=np.float32)) / 24.0, 0.0, 1.0)[:, None, None]
+                    c_arr[y_vp1:] = np.clip(
+                        r_bot * c_arr[y_vp1:].astype(np.float32) + (1.0 - r_bot) * f0_canvas_arr[y_vp1:].astype(np.float32),
+                        0.0,
+                        255.0,
+                    ).astype(np.uint8)
+                canv = Image.fromarray(c_arr, mode="RGB")
+        final_frames.append(canv)
+
     if len(final_frames) != expected_frames:
         raise AssertionError(f"Conform frame count mismatch: got {len(final_frames)}, expected {expected_frames}")
 

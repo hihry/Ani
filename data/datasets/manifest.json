@@ -163,7 +163,7 @@
     "perception_ocr_speaker": {
       "path": "data/datasets/perception_ocr_speaker/train.jsonl",
       "records_count": 54,
-      "sha256": "a6129b48a4da95c58111ddd94143847b91273ba48d1ef0f31f420576f7d197c2"
+      "sha256": "6c7d6c8802fd44ca259c1f8752ac5195b14cf6788c32f3687e7d5c05db567fdc"
     },
     "bg_3d_stage": {
       "path": "data/datasets/bg_3d_stage/train.jsonl",

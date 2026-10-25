@@ -147,15 +147,21 @@ func resolvePythonBin() string {
 	if envPy := os.Getenv("M2A_PYTHON"); envPy != "" {
 		return envPy
 	}
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, ".local", "share", "mise", "installs", "python", "3.15.0", "bin", "python3"),
+			filepath.Join(home, ".local", "share", "mise", "shims", "python"),
+		)
+	}
 	for _, name := range []string{"python3", "python"} {
 		if p, err := exec.LookPath(name); err == nil {
-			return p
+			candidates = append(candidates, p)
 		}
 	}
-	if home, err := os.UserHomeDir(); err == nil {
-		misePy := filepath.Join(home, ".local", "share", "mise", "shims", "python")
-		if _, err := os.Stat(misePy); err == nil {
-			return misePy
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c
 		}
 	}
 	return "python3"
