@@ -33,58 +33,12 @@ except ImportError:
 
 logger = logging.getLogger("m2a.understanding")
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-
 CAMERA_MOTION_TAXONOMY: Dict[str, Tuple[str, str, float]] = {
     "close_up": ("zoom_in", "dramatic slow push-in on character expression, subtle hair and eye shimmer", 0.65),
     "splash": ("zoom_out", "dynamic impact camera pullback, intense aura and debris motion", 0.80),
     "medium": ("pan_down", "steady cinematic vertical track, layered depth parallax", 0.45),
     "wide": ("pan_right", "slow establishing horizon pan, gentle atmospheric drift", 0.25),
 }
-
-
-@functools.lru_cache(maxsize=4)
-def _load_eval_ground_truth(gt_path_str: str) -> Dict[str, Any]:
-    return json.loads(Path(gt_path_str).read_text(encoding="utf-8"))
-
-
-@functools.lru_cache(maxsize=16)
-def _load_gt_crop_thumb(page_path_str: str, x: int, y: int, w: int, h: int) -> np.ndarray:
-    page_img = Image.open(page_path_str).convert("RGB")
-    crop = page_img.crop((x, y, x + w, y + h)).resize((16, 16), Image.Resampling.BILINEAR)
-    return np.asarray(crop, dtype=np.float32)
-
-
-def matches_gt_panel_crop(panel_img: Image.Image, eval_dir: Path, gp: Dict[str, Any]) -> bool:
-    """Verifies whether panel_img genuinely comes from the eval ground_truth panel crop (prevents GT leakage on other images)."""
-    page_id = gp.get("page") or gp.get("page_id", "")
-    page_file = eval_dir / page_id
-    if not page_file.is_file():
-        return False
-    bbox = gp.get("bbox", {})
-    bx, by, bw, bh = int(bbox.get("x", 0)), int(bbox.get("y", 0)), int(bbox.get("w", 0)), int(bbox.get("h", 0))
-    if bw <= 0 or bh <= 0:
-        return False
-    try:
-        gt_thumb = _load_gt_crop_thumb(str(page_file), bx, by, bw, bh)
-        panel_thumb = np.asarray(panel_img.resize((16, 16), Image.Resampling.BILINEAR), dtype=np.float32)
-        mae = float(np.mean(np.abs(gt_thumb - panel_thumb)))
-        return mae < 12.0
-    except Exception:
-        return False
-
-
-def _match_any_gt_panel(panel_img: Image.Image, eval_dir: Path, gt_data: Dict[str, Any], reading_order: Optional[int] = None) -> Optional[Dict[str, Any]]:
-    """Finds the matching ground-truth panel entry if panel_img perceptually matches a benchmark crop."""
-    panels = gt_data.get("panels", [])
-    if reading_order is not None:
-        for gp in panels:
-            if gp.get("reading_order") == reading_order and matches_gt_panel_crop(panel_img, eval_dir, gp):
-                return gp
-    for gp in panels:
-        if matches_gt_panel_crop(panel_img, eval_dir, gp):
-            return gp
-    return None
 
 
 def detect_speech_bubbles_and_text(
@@ -959,101 +913,8 @@ def analyze_panel(
                 logger.debug(f"Could not save annotated preview {annotated_path}: {e}")
         return vlm_res
 
-    # Step 2B: Optional ground-truth oracle mode (disabled by default; only active when M2A_EVAL_ORACLE=1)
-    matched_gt: Optional[Dict[str, Any]] = None
-    oracle_env = os.environ.get("M2A_EVAL_ORACLE", "0").strip().lower()
-    if oracle_env in ("1", "true", "yes", "force"):
-        eval_dir = _REPO_ROOT / "data" / "eval"
-        gt_path = eval_dir / "ground_truth.json"
-        if gt_path.is_file():
-            try:
-                gt_data = _load_eval_ground_truth(str(gt_path))
-                idx_num = reading_order
-                if idx_num is None and "_" in panel_id:
-                    tail = panel_id.split("_")[-1]
-                    if tail.isdigit():
-                        idx_num = int(tail)
-                if detected_bubbles:
-                    matched_gt = _match_any_gt_panel(img, eval_dir, gt_data, reading_order=idx_num)
-            except Exception:
-                matched_gt = None
-
-    if matched_gt is not None:
-        shot = matched_gt.get("shot_type", shot)
-        action = matched_gt.get("action_description", action)
-        _, default_prompt, base_intensity = CAMERA_MOTION_TAXONOMY.get(shot, CAMERA_MOTION_TAXONOMY["medium"])
-        motion_intensity = round(min(1.0, max(0.2, base_intensity)), 2)
-        p_bbox = matched_gt.get("bbox", {"x": 0, "y": 0, "w": w, "h": h})
-        px, py = int(p_bbox.get("x", 0)), int(p_bbox.get("y", 0))
-
-        used_det: set[int] = set()
-        for d in matched_gt.get("dialogue", []):
-            db = d.get("bbox")
-            rel_bbox = None
-            det_conf = 0.96
-            if db:
-                gt_rel = {
-                    "x": max(0, min(w - 1, int(db["x"]) - px)),
-                    "y": max(0, min(h - 1, int(db["y"]) - py)),
-                    "w": max(1, int(db["w"])),
-                    "h": max(1, int(db["h"])),
-                }
-                best_iou = 0.0
-                best_b_idx = -1
-                for b_idx, det_b in enumerate(detected_bubbles):
-                    if b_idx in used_det:
-                        continue
-                    iou_val = _bbox_iou(det_b["bbox"], gt_rel)
-                    if iou_val > best_iou:
-                        best_iou = iou_val
-                        best_b_idx = b_idx
-                if best_iou >= 0.30 and best_b_idx >= 0:
-                    used_det.add(best_b_idx)
-                    rel_bbox = detected_bubbles[best_b_idx]["bbox"]
-                    det_conf = detected_bubbles[best_b_idx].get("confidence", 0.96)
-
-            if rel_bbox is None:
-                continue
-
-            speaker_raw = d.get("speaker", "narrator")
-            speaker_id = f"char_{speaker_raw.lower().replace(' ', '_')}"
-            if speaker_raw.upper() == "SFX":
-                sfx.append(
-                    {
-                        "text": d.get("text", ""),
-                        "kind": "impact",
-                        "bbox": rel_bbox,
-                    }
-                )
-            else:
-                lang_val = d.get("language", language)
-                if lang_val not in ("ko", "ja", "en"):
-                    lang_val = "ko"
-                dialogue.append(
-                    {
-                        "speaker_id": speaker_id,
-                        "text": d.get("text", ""),
-                        "lang": lang_val,
-                        "emotion": d.get("emotion", "neutral"),
-                        "bbox": rel_bbox,
-                        "confidence": det_conf,
-                    }
-                )
-
-        raw_chars = [
-            {
-                "id": c.get("id", "char_unknown"),
-                "name": c.get("name", "Unknown"),
-                "emotion": c.get("emotion", "neutral"),
-                "pose": c.get("pose", "standing"),
-            }
-            for c in matched_gt.get("characters", [])
-        ]
-        characters = _save_character_crops_for_known_characters(
-            img, panel_id, raw_chars, detected_bubbles, crops_dir=crops_dir
-        )
-    elif detected_bubbles:
-        # Step 2C: Genuine non-oracle manhwa panel analysis (CV bubble detection + OCR + spatial/semantic speaker linking)
+    if detected_bubbles:
+        # Genuine manhwa panel analysis (CV bubble detection + OCR + spatial/semantic speaker linking)
         raw_characters, speaker_ids = detect_characters_and_link_speakers(
             img, panel_id, detected_bubbles, crops_dir=None
         )

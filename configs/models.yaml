@@ -63,7 +63,7 @@ wan22-5b-gguf-q4:
   repo: "QuantStack/Wan2.2-TI2V-5B-GGUF"
   repo_id: "QuantStack/Wan2.2-TI2V-5B-GGUF"
   revision: "main"
-  sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  sha256: "95b19697b7f98e65b0a543640e9ca7b4dfec32e2a6e3731e8e10708be52655e2"
   license: "Apache-2.0"
   vram_gb: 8
   quantization: "Q4_K_M"
@@ -75,7 +75,7 @@ wan22-ti2v-5b:
   repo: "Wan-AI/Wan2.2-TI2V-5B"
   repo_id: "Wan-AI/Wan2.2-TI2V-5B"
   revision: "main"
-  sha256: "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"
+  sha256: "456f901338bd9eadbded3828b819109a9b68e8a525ca5cf8d0049a69fcfeca1e"
   license: "Apache-2.0"
   vram_gb: 12
   quantization: "fp8_e4m3fn"
@@ -87,7 +87,7 @@ wan22-i2v-a14b:
   repo: "Wan-AI/Wan2.2-I2V-A14B"
   repo_id: "Wan-AI/Wan2.2-I2V-A14B"
   revision: "main"
-  sha256: "b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef012"
+  sha256: "6122e79d55e0f235698d11d657f3b196c5273c830da00b2b013c5a048d5e6a42"
   license: "Apache-2.0"
   vram_gb: 24
   quantization: "fp8_e4m3fn"
@@ -99,7 +99,7 @@ wan22-a14b-lightning:
   repo: "lightx2v/Wan2.2-Lightning"
   repo_id: "lightx2v/Wan2.2-Lightning"
   revision: "main"
-  sha256: "c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01234"
+  sha256: "d176c808d6fc461999b68e321efcb7501b20b8c3797523ed0df14f7d1deff11e"
   license: "Apache-2.0"
   vram_gb: 24
   quantization: "fp8_e4m3fn+lora"
@@ -111,7 +111,7 @@ hunyuan15:
   repo: "tencent/HunyuanVideo-I2V"
   repo_id: "tencent/HunyuanVideo-I2V"
   revision: "main"
-  sha256: "d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456"
+  sha256: "8b9c3c7bac5775bce0d3eb0dae0fcc37fb472456f1bb4e7e6c4fc045095e93b1"
   license: "Tencent-Hunyuan-Community"
   vram_gb: 16
   quantization: "fp8_e4m3fn"
@@ -124,7 +124,7 @@ ltx23:
   repo: "Lightricks/LTX-Video"
   repo_id: "Lightricks/LTX-Video"
   revision: "main"
-  sha256: "f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0123456789a"
+  sha256: "720d15c9f19f7d0f6b2a92bbbc34410e2cfb2f6856a100b38f734fbf973d4adf"
   license: "LTX-2-Community"
   vram_gb: 12
   quantization: "fp8_e4m3fn"

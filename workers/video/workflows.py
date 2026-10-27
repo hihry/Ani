@@ -47,8 +47,15 @@ def inject(
     cfg: float,
     fps: int,
     filename_prefix: str = "m2a_clip",
+    sampler: str = "",
+    scheduler: str = "",
+    denoise: float | None = None,
 ) -> Dict[str, Any]:
     wf = copy.deepcopy(template)
+    has_wan22_latent = any(
+        isinstance(n, dict) and n.get("class_type") == "Wan22ImageToVideoLatent"
+        for n in wf.values()
+    )
     for node in wf.values():
         if not isinstance(node, dict):
             continue
@@ -72,6 +79,14 @@ def inject(
             inp["steps"] = int(steps)
             if "cfg" in inp:
                 inp["cfg"] = float(cfg)
+            if sampler and "sampler_name" in inp:
+                inp["sampler_name"] = str(sampler)
+            if scheduler and "scheduler" in inp:
+                inp["scheduler"] = str(scheduler)
+            if denoise is not None and "denoise" in inp:
+                inp["denoise"] = float(denoise)
+            if has_wan22_latent and "denoise" in inp:
+                inp["denoise"] = 1.0
             if "seed" in inp:
                 inp["seed"] = int(seed)
             if "noise_seed" in inp:
@@ -83,6 +98,10 @@ def inject(
             inp["steps"] = int(steps)
             if "cfg" in inp:
                 inp["cfg"] = float(cfg)
+            if sampler and "sampler_name" in inp:
+                inp["sampler_name"] = str(sampler)
+            if scheduler and "scheduler" in inp:
+                inp["scheduler"] = str(scheduler)
             if "seed" in inp:
                 inp["seed"] = int(seed)
             if "noise_seed" in inp:

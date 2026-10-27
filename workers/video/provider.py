@@ -155,7 +155,9 @@ class ComfyVideoProvider:
         panel_id = str(panel.get("panel_id") or clean_plate.stem)
 
         pos_prompt, neg_prompt = build_prompt(panel, understanding_panel, self.spec)
-        native_w, native_h = pick_bucket(target_res[0], target_res[1], self.spec.resolution_buckets)
+        from PIL import Image
+        src_img = Image.open(clean_plate).convert("RGB")
+        native_w, native_h = pick_bucket(src_img.width, src_img.height, self.spec.resolution_buckets)
         native_frames = frames_for(duration_s, self.spec)
 
         prepared_input = prepare_input(
@@ -183,17 +185,24 @@ class ComfyVideoProvider:
         final_clip_path = out_dir / f"{panel_id}_{self.spec.model_id}_s{seed}.avi"
         cached_meta = self.cache.get(cache_key, final_clip_path)
         if cached_meta is not None and final_clip_path.is_file():
-            # Ensure conformed frame count matches requested duration_s * fps
-            conform(
-                raw_clip=final_clip_path,
-                clean_plate=clean_plate,
-                duration_s=duration_s,
-                out_path=final_clip_path,
-                fps=fps,
-                width=target_res[0],
-                height=target_res[1],
-                native_fps=self.spec.native_fps,
-            )
+            from workers.assembler import decode_video_frames
+            expected_frames = max(1, int(round(float(duration_s) * int(fps))))
+            cached_frames = decode_video_frames(final_clip_path)
+            if (
+                not cached_frames
+                or len(cached_frames) != expected_frames
+                or cached_frames[0].size != (int(target_res[0]), int(target_res[1]))
+            ):
+                conform(
+                    raw_clip=final_clip_path,
+                    clean_plate=clean_plate,
+                    duration_s=duration_s,
+                    out_path=final_clip_path,
+                    fps=fps,
+                    width=target_res[0],
+                    height=target_res[1],
+                    native_fps=self.spec.native_fps,
+                )
             return GenResult(
                 clip_path=final_clip_path,
                 raw_clip_path=final_clip_path,
@@ -225,6 +234,8 @@ class ComfyVideoProvider:
             cfg=self.spec.cfg,
             fps=self.spec.native_fps,
             filename_prefix=f"m2a_{panel_id}_{self.spec.model_id}",
+            sampler=self.spec.sampler,
+            scheduler=self.spec.scheduler,
         )
 
         raw_dir = out_dir / "_raw"
@@ -234,6 +245,7 @@ class ComfyVideoProvider:
             cancel_event=cancel_event,
         )
         gen_seconds = round(time.monotonic() - t0, 3)
+        self.client.free_memory(unload_models=False, free_memory=True)
 
         conform(
             raw_clip=raw_clip_path,

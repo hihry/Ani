@@ -28,7 +28,6 @@ try:
     from workers.understanding import (
         CAMERA_MOTION_TAXONOMY,
         analyze_panel,
-        matches_gt_panel_crop as _matches_gt_panel_crop,
     )
     from workers.assembler import (
         assemble_timeline,
@@ -47,7 +46,6 @@ except ImportError:
     from understanding import (
         CAMERA_MOTION_TAXONOMY,
         analyze_panel,
-        matches_gt_panel_crop as _matches_gt_panel_crop,
     )
     from assembler import (
         assemble_timeline,

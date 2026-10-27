@@ -45,6 +45,9 @@ def ensure_sample_pages():
         gen_pages()
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
 def test_phase1_segmentation_f1_and_iou():
     gt_path = ROOT / "data" / "eval" / "ground_truth.json"
     report = evaluate_detection(gt_path)
@@ -54,6 +57,7 @@ def test_phase1_segmentation_f1_and_iou():
     assert report["mean_iou"] >= 0.99
 
 
+@pytest.mark.worker
 def test_side_by_side_vertical_gutter_slicing(tmp_path: Path):
     """Verifies that two side-by-side panels separated by a vertical gutter are segmented individually."""
     img = Image.new("RGB", (800, 600), (255, 255, 255))
@@ -71,6 +75,7 @@ def test_side_by_side_vertical_gutter_slicing(tmp_path: Path):
     assert panels[1]["reading_order"] == 2
 
 
+@pytest.mark.worker
 def test_wide_panel_cinematic_canvas_preserves_aspect():
     """Verifies P10 fix: wide landscape panels are letterboxed onto blurred-fill 9:16 canvas."""
     wide_img = Image.new("RGB", (720, 400), (60, 130, 200))
@@ -78,6 +83,9 @@ def test_wide_panel_cinematic_canvas_preserves_aspect():
     assert canvas.size == (int(360 * 1.2), int(640 * 1.2))
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_kenburns_and_parallax_and_qc(tmp_path: Path):
     sample_panel = ROOT / "data" / "eval" / "sample_page_1.png"
     kb_frames = generate_kenburns_frames(sample_panel, target_res=(180, 320), duration_s=1.0, fps=8)
@@ -94,6 +102,9 @@ def test_kenburns_and_parallax_and_qc(tmp_path: Path):
     assert qc_scores["overall_pass"] is True
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
 def test_qc_rejects_frozen_clip():
     """Verifies P1-03: a completely static clip (identical frames) has motion_score=0.0 and fails QC."""
     sample_panel = ROOT / "data" / "eval" / "sample_page_1.png"
@@ -105,6 +116,9 @@ def test_qc_rejects_frozen_clip():
     assert qc_scores["overall_pass"] is False
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_understand_no_oracle_leakage_on_noise(tmp_path: Path):
     """Verifies P0-03: random noise or unrelated images do not leak ground_truth.json dialogue."""
     rng = np.random.default_rng(42)
@@ -117,6 +131,7 @@ def test_understand_no_oracle_leakage_on_noise(tmp_path: Path):
     assert sem["characters"] == []
 
 
+@pytest.mark.worker
 def test_srt_formatting_and_overlap_sync(tmp_path: Path):
     """Verifies P1-04: _fmt_srt_time never emits ,1000 and SRT cues stay within crossfaded video duration."""
     assert _fmt_srt_time(1.9996) == "00:00:02,000"
@@ -174,6 +189,7 @@ def test_srt_formatting_and_overlap_sync(tmp_path: Path):
     assert last_end_s <= res["duration_s"] + 1e-3
 
 
+@pytest.mark.worker
 def test_audio_anchored_mix(tmp_path: Path):
     """Verifies P1-05: mix_timed_tracks places audio at its exact timeline offset (silent panels don't shift later lines)."""
     wav1 = tmp_path / "line_late.wav"
@@ -191,6 +207,7 @@ def test_audio_anchored_mix(tmp_path: Path):
     assert np.max(np.abs(samples[int(1.55 * 24000) : int(2.2 * 24000)])) > 500
 
 
+@pytest.mark.worker
 def test_clean_plate_and_tts_synthesis(tmp_path: Path):
     sample_page = ROOT / "data" / "eval" / "sample_page_1.png"
     clean_out = tmp_path / "clean.png"
@@ -203,6 +220,9 @@ def test_clean_plate_and_tts_synthesis(tmp_path: Path):
     assert dur >= 1.2
 
 
+@pytest.mark.contract
+@pytest.mark.api_ui
+@pytest.mark.api
 def test_go_state_json_interoperability(tmp_path: Path):
     """Verifies that Python RunState loads state.json cleanly and rejects out-of-range durations."""
     existing_run = ROOT / "runs" / "396d8463-dbfb-4263-b474-d9c558263b20"
@@ -214,6 +234,9 @@ def test_go_state_json_interoperability(tmp_path: Path):
             assert "\\" not in cp
 
 
+@pytest.mark.worker
+@pytest.mark.api_ui
+@pytest.mark.api
 def test_python_graph_missing_page_fails_and_resumes(tmp_path: Path):
     """Verifies P0-01 and P0-10: missing input page marks run FAILED, and resume recovers from FAILED."""
     cfg = load_config("t0", config_dir=ROOT / "configs")
@@ -228,6 +251,9 @@ def test_python_graph_missing_page_fails_and_resumes(tmp_path: Path):
     assert state.current_stage == PipelineStage.FAILED
 
 
+@pytest.mark.contract
+@pytest.mark.api_ui
+@pytest.mark.api
 def test_config_tier_loading():
     cfg_t0 = load_config("t0", config_dir=ROOT / "configs")
     assert cfg_t0.generation.primary_model == "kenburns"
@@ -237,6 +263,7 @@ def test_config_tier_loading():
     assert cfg_t2.generation.primary_model == "wan22-i2v-a14b"
 
 
+@pytest.mark.worker
 def test_worker_fastapi_endpoints(tmp_path: Path):
     client = TestClient(worker_app)
     h = client.get("/health")
@@ -258,6 +285,8 @@ def test_worker_fastapi_endpoints(tmp_path: Path):
     assert len(und.json()["dialogue"]) >= 1
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_eval_metrics_functions():
     assert character_error_rate("hello", "hello") == 0.0
     assert 0.15 <= character_error_rate("hallo", "hello") <= 0.25
@@ -268,12 +297,35 @@ def test_eval_metrics_functions():
     assert temporal_stability([arr, arr, arr]) == 1.0
 
 
-def test_job_api_lifecycle():
+@pytest.mark.api_ui
+@pytest.mark.api
+def test_job_api_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("api.app.RUNS_DIR", tmp_path / "runs")
     client = TestClient(job_app)
     resp = client.get("/health")
     assert resp.status_code == 200
 
+    sub = client.post("/jobs", json={"source_pages": [], "source_language": "en", "compute_tier": "t0"})
+    assert sub.status_code == 200
+    job_id = sub.json()["job_id"]
+    assert sub.json()["current_stage"] == "INGEST"
 
+    st = client.get(f"/jobs/{job_id}")
+    assert st.status_code == 200
+    assert st.json()["job_id"] == job_id
+
+    full_st = client.get(f"/jobs/{job_id}/state")
+    assert full_st.status_code == 200
+    assert full_st.json()["config"]["run_id"] == job_id
+
+    canc = client.delete(f"/jobs/{job_id}")
+    assert canc.status_code == 200
+    assert client.get(f"/jobs/{job_id}").json()["current_stage"] == "FAILED"
+
+
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
 def test_phase2_evaluation_benchmark():
     """Verifies Phase 2 benchmark targets: Speech Bubble F1 >= 0.90, CER <= 0.10, Speaker Acc >= 0.90, Clean-Plate Removal == 1.0."""
     gt_path = ROOT / "data" / "eval" / "ground_truth.json"
@@ -287,6 +339,7 @@ def test_phase2_evaluation_benchmark():
     assert report["clean_plate_removal_rate"] == 1.0
 
 
+@pytest.mark.worker
 def test_phase2_unseen_panel_bubble_detection_and_character_crop(tmp_path: Path):
     """Verifies that a brand-new manhwa panel (not in data/eval) has its speech bubble, pointer tail, and character crop extracted."""
     img = Image.new("RGB", (640, 520), (110, 170, 225))
@@ -329,6 +382,9 @@ def test_phase2_unseen_panel_bubble_detection_and_character_crop(tmp_path: Path)
     assert annotated_path.is_file()
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_phase2_clean_plate_mask_and_qc_text_leakage(tmp_path: Path):
     """Verifies clean-plate *_mask.png persistence, 100% bubble+tail removal, and QC new_text_count leakage detection."""
     img = Image.new("RGB", (600, 480), (95, 155, 215))
@@ -366,6 +422,9 @@ def test_phase2_clean_plate_mask_and_qc_text_leakage(tmp_path: Path):
     assert qc_leaked["overall_pass"] is False
 
 
+@pytest.mark.api_ui
+@pytest.mark.api
+@pytest.mark.worker
 def test_phase2_checkpoint1_human_edit_sync(tmp_path: Path):
     """Verifies that human edits to understanding/<panel_id>.json at CHECKPOINT_1 are synced on resume."""
     page_img = Image.new("RGB", (800, 700), (255, 255, 255))
@@ -404,6 +463,8 @@ def test_phase2_checkpoint1_human_edit_sync(tmp_path: Path):
     assert "Human reviewed CP1 line!" in srt_content
 
 
+@pytest.mark.worker
+@pytest.mark.contract
 def test_phase2_providers_contract(tmp_path: Path):
     """Verifies concrete Phase 2 providers (Magiv3, PaddleOCR, MangaOCR, QwenOCR, Qwen3VL, LaMa)."""
     from m2a.providers import (
@@ -446,6 +507,7 @@ def test_phase2_providers_contract(tmp_path: Path):
     assert clean_out.is_file()
 
 
+@pytest.mark.worker
 def test_adversarial_asymmetric_t_gutter_and_3column_slicing(tmp_path: Path):
     """Stress-tests 2D gutter slicing on an asymmetric T-split (1 tall left + 2 stacked right) and a 3-column row."""
     page = Image.new("RGB", (800, 1150), (255, 255, 255))
@@ -478,6 +540,7 @@ def test_adversarial_asymmetric_t_gutter_and_3column_slicing(tmp_path: Path):
     assert panels[3]["bbox"]["x"] < panels[4]["bbox"]["x"] < panels[5]["bbox"]["x"]
 
 
+@pytest.mark.worker
 def test_adversarial_bucket_boundary_and_multi_bubble_reading_order():
     """Stress-tests multi-bubble reading order when two side-by-side bubbles straddle y=45 (46 vs 40)."""
     img = Image.new("RGB", (720, 500), (85, 135, 195))
@@ -509,6 +572,7 @@ def test_adversarial_bucket_boundary_and_multi_bubble_reading_order():
     assert bubbles[3]["bbox"]["y"] > 300 and bubbles[3]["bbox"]["x"] > 350
 
 
+@pytest.mark.worker
 def test_adversarial_false_positive_white_decors_vs_real_bubble():
     """Verifies that empty white moons, single-dot white armor, and bright yellow suns are NOT mistaken for speech bubbles."""
     img = Image.new("RGB", (700, 520), (45, 40, 80))
@@ -536,6 +600,7 @@ def test_adversarial_false_positive_white_decors_vs_real_bubble():
     assert abs(bubbles[0]["bbox"]["y"] - 45) <= 4
 
 
+@pytest.mark.worker
 def test_adversarial_two_character_distinct_ids_and_tail_speaker_linking(tmp_path: Path):
     """Verifies that 2 characters in the same panel get distinct IDs, distinct crop files, and accurate tail-based speaker attribution."""
     img = Image.new("RGB", (720, 560), (120, 165, 210))
@@ -584,6 +649,7 @@ def test_adversarial_two_character_distinct_ids_and_tail_speaker_linking(tmp_pat
     assert sem["dialogue"][1]["speaker_id"] == char_right["id"]
 
 
+@pytest.mark.worker
 def test_adversarial_edge_touching_and_full_width_banner_inpainting(tmp_path: Path):
     """Stress-tests clean-plate inpainting when bubbles touch the left edge, right edge, or span the full panel width."""
     img = Image.new("RGB", (640, 520), (85, 145, 210))
@@ -624,6 +690,7 @@ def test_adversarial_edge_touching_and_full_width_banner_inpainting(tmp_path: Pa
     assert clean_arr[240:280, 20:620].mean() < 180.0
 
 
+@pytest.mark.worker
 def test_adversarial_multiline_srt_monotonicity_under_tight_duration(tmp_path: Path):
     """Stress-tests SRT cue scheduling when a single 1.5s panel has 4 dialogue lines with 1.2s audio tracks each."""
     run_dir = tmp_path / "run_multiline"
@@ -696,6 +763,9 @@ def test_adversarial_multiline_srt_monotonicity_under_tight_duration(tmp_path: P
     assert prev_end <= res["duration_s"] + 1e-3
 
 
+@pytest.mark.api_ui
+@pytest.mark.api
+@pytest.mark.worker
 def test_adversarial_special_chars_in_speaker_id_and_corrupt_cp1_json(tmp_path: Path):
     """Stress-tests CP1 resume when speaker_id contains path separators/colons and duration_s is out of bounds."""
     page_img = Image.new("RGB", (800, 700), (255, 255, 255))
@@ -738,6 +808,9 @@ def test_adversarial_special_chars_in_speaker_id_and_corrupt_cp1_json(tmp_path: 
     assert Path(state.audio_tracks[0].audio_path).is_file()
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_phase2_non_oracle_ocr_and_no_orphan_crops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Verifies P2-01 and P2-10: real pixel OCR + non-oracle evaluation passes all targets and leaves zero orphan crops."""
     monkeypatch.setenv("M2A_EVAL_ORACLE", "0")
@@ -769,6 +842,9 @@ def test_phase2_non_oracle_ocr_and_no_orphan_crops(monkeypatch: pytest.MonkeyPat
     assert crop_files == ["beast_01_char_beast.png"]
 
 
+@pytest.mark.api_ui
+@pytest.mark.api
+@pytest.mark.worker
 def test_phase2_cp2_preserves_tts_duration_and_syncs_route_edits(tmp_path: Path):
     """Verifies P2-02: resuming from CHECKPOINT_2 preserves TTS-synchronized duration_s and syncs routing_plan.json edits."""
     page_img = Image.new("RGB", (800, 700), (255, 255, 255))
@@ -810,6 +886,7 @@ def test_phase2_cp2_preserves_tts_duration_and_syncs_route_edits(tmp_path: Path)
     assert state.panels[0].route == "parallax"
 
 
+@pytest.mark.worker
 def test_phase2_top_right_character_upward_tail_and_magiv3_bbox(tmp_path: Path):
     """Verifies P2-04 (top-right character not blinded), P2-08 (upward pointer tail), and P2-06 (Magiv3 tight character BBox)."""
     from m2a.providers import get_perception_provider
@@ -852,6 +929,9 @@ def test_phase2_top_right_character_upward_tail_and_magiv3_bbox(tmp_path: Path):
     assert links[0].character_bbox == char_dets[1].bbox
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
 def test_phase2_qc_last_frame_text_leakage_detection(tmp_path: Path):
     """Verifies P2-09: compute_clip_qc_metrics catches a leaked speech bubble appearing in the last frame."""
     clean_img = Image.new("RGB", (360, 640), (85, 145, 210))
@@ -873,6 +953,9 @@ def test_phase2_qc_last_frame_text_leakage_detection(tmp_path: Path):
     assert qc_res["overall_pass"] is False
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_webtoon_gutter_ocr_garbage_and_pan_qc_regressions(tmp_path: Path):
     """Verifies fixes for real-world webtoon gutter false-positive bubbles, OCR punctuation soup, and pan_down/tall-strip QC."""
     from workers.understanding import _decode_pil_bitmap_text, _is_plausible_ocr_text
@@ -907,6 +990,37 @@ def test_webtoon_gutter_ocr_garbage_and_pan_qc_regressions(tmp_path: Path):
         assert qc_res["first_frame_fidelity"] >= 0.75, f"{mtype} first_frame_fidelity too low: {qc_res}"
         assert qc_res["new_text_count"] == 0
         assert qc_res["overall_pass"] is True, f"{mtype} failed QC: {qc_res}"
+
+
+@pytest.mark.contract
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
+def test_zero_ground_truth_leakage_in_production_code():
+    """Enforces the Zero Ground-Truth Leakage invariant across all production worker, node, provider, and Go files."""
+    prod_dirs = [
+        ROOT / "workers",
+        ROOT / "src" / "m2a" / "nodes",
+        ROOT / "src" / "m2a" / "providers",
+        ROOT / "internal",
+        ROOT / "cmd",
+        ROOT / "api",
+        ROOT / "ui",
+    ]
+    violations = []
+    for d in prod_dirs:
+        if not d.exists():
+            continue
+        for p in d.rglob("*"):
+            if not p.is_file() or p.suffix not in (".py", ".go"):
+                continue
+            if p.parent == ROOT / "workers" and p.name.startswith("eval_"):
+                continue
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            if "ground_truth.json" in text or "_load_eval_ground_truth" in text:
+                violations.append(str(p.relative_to(ROOT)))
+    assert violations == [], f"Ground-truth leakage detected in production files: {violations}"
+
 
 
 

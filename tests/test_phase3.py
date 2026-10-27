@@ -87,6 +87,10 @@ def _make_inprocess_comfy_client(tmp_path: Path, mode: str = "normal") -> tuple[
     return client, fake_state
 
 
+@pytest.mark.contract
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_m0_models_yaml_and_manifest_audit(tmp_path: Path) -> None:
     """Verifies M0-4 and M1-4: models.yaml licences & repo IDs, and download_models.py --dry-run."""
     models_data = yaml.safe_load((REPO_ROOT / "configs" / "models.yaml").read_text(encoding="utf-8"))
@@ -104,6 +108,8 @@ def test_m0_models_yaml_and_manifest_audit(tmp_path: Path) -> None:
     assert all(item["sha256"] for item in plan)
 
 
+@pytest.mark.worker
+@pytest.mark.contract
 def test_m2_all_6_workflow_templates_and_injection() -> None:
     """Verifies M2-1 & M2-2: all 6 API workflow templates contain REQUIRED_TAGS and inject cleanly."""
     wf_dir = REPO_ROOT / "workflows" / "comfyui"
@@ -132,9 +138,15 @@ def test_m2_all_6_workflow_templates_and_injection() -> None:
             cfg=4.5,
             fps=16,
             filename_prefix="test_prefix",
+            sampler="euler",
+            scheduler="simple",
         )
         found_tags = {n.get("_meta", {}).get("title") for n in injected.values() if isinstance(n, dict)}
         assert REQUIRED_TAGS.issubset(found_tags)
+        if fname in ("wan22_ti2v5b_gguf_api.json", "wan22_ti2v5b_fp8_api.json"):
+            class_types = {n.get("class_type") for n in injected.values() if isinstance(n, dict)}
+            assert "Wan22ImageToVideoLatent" in class_types
+            assert "ModelSamplingSD3" in class_types
         for node in injected.values():
             tag = node.get("_meta", {}).get("title")
             inp = node.get("inputs", {})
@@ -147,8 +159,14 @@ def test_m2_all_6_workflow_templates_and_injection() -> None:
             elif tag == "M2A_LATENT":
                 assert inp["width"] == 544 and inp["height"] == 960
                 assert (inp.get("length") or inp.get("num_frames")) == 49
+            elif tag == "M2A_SAMPLER":
+                if "sampler_name" in inp:
+                    assert inp["sampler_name"] == "euler"
+                if "scheduler" in inp:
+                    assert inp["scheduler"] == "simple"
 
 
+@pytest.mark.worker
 def test_m2_comfy_client_fault_modes(tmp_path: Path) -> None:
     """Verifies M1-5 & M2-3: ComfyClient against FakeComfyUI in normal, cached, oom, node_error, and timeout modes."""
     wf = load_template(REPO_ROOT / "workflows" / "comfyui" / "wan22_ti2v5b_fp8_api.json")
@@ -156,7 +174,7 @@ def test_m2_comfy_client_fault_modes(tmp_path: Path) -> None:
 
     # 1. Normal mode
     client, state = _make_inprocess_comfy_client(tmp_path, mode="normal")
-    probe = client.probe(required_nodes=["UNETLoader", "WanImageToVideo"])
+    probe = client.probe(required_nodes=["UNETLoader", "Wan22ImageToVideoLatent", "ModelSamplingSD3"])
     assert probe["ready"] is True and probe["vram_gb"] == 24.0
     uploaded = client.upload_image(plate)
     assert uploaded == "plate.png"
@@ -207,9 +225,11 @@ def test_m2_comfy_client_fault_modes(tmp_path: Path) -> None:
     assert st_to.interrupted >= 1
 
 
+@pytest.mark.worker
 def test_m2_conform_frame_snapping_and_long_duration_tail(tmp_path: Path) -> None:
     """Verifies M2-6 & E2/E7: frame snapping (4k+1 / 8k+1), 1:4 vertical strip canvas preparation,
-    and exact frame count `round(duration_s * 24)` even when `duration_s > max_frames / native_fps`.
+    exact frame count `round(duration_s * 24)` even when `duration_s > max_frames / native_fps`,
+    and zero frozen frames / zero jump discontinuity across the slow-mo-to-tail transition (RC3).
     """
     specs = load_model_specs()
     wan_spec = specs["wan22-5b-fp8"]
@@ -243,8 +263,14 @@ def test_m2_conform_frame_snapping_and_long_duration_tail(tmp_path: Path) -> Non
     decoded = decode_video_frames(conformed_path)
     assert len(decoded) == round(6.5 * 24)
     assert decoded[0].size == (540, 960)
+    arrs = [np.asarray(f, dtype=np.float32) for f in decoded]
+    diffs = [float(np.mean(np.abs(arrs[i + 1] - arrs[i]))) for i in range(len(arrs) - 1)]
+    assert min(diffs) > 0.05, f"Expected zero bit-identical frames in conformed clip, got min_diff={min(diffs)}"
+    assert min(diffs[47:]) > 0.25, f"Expected continuous motion across conformed tail, got tail min_diff={min(diffs[47:])}"
+    assert max(diffs[46:]) < 2.0, f"Expected smooth slow-mo-to-tail transition without jump pop, got tail max_diff={max(diffs[46:])}"
 
 
+@pytest.mark.worker
 def test_m2_video_provider_and_cache_hit(tmp_path: Path) -> None:
     """Verifies M2-4 & M2-7: ComfyVideoProvider end-to-end generation + content-addressed ClipCache hit."""
     client, state = _make_inprocess_comfy_client(tmp_path, mode="normal")
@@ -284,6 +310,9 @@ def test_m2_video_provider_and_cache_hit(tmp_path: Path) -> None:
     assert len(decode_video_frames(res2.clip_path)) == 48
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
 def test_m4_qc_metrics_v2_rejects_all_6_adversarial_clips(tmp_path: Path) -> None:
     """Verifies M4-1, M4-2 & E6: all 6 adversarial clip classes are 100% rejected by QC v2 while clean clips pass."""
     plate = _make_clean_anime_panel(tmp_path / "clean_plate.png", size=(540, 960))
@@ -302,6 +331,8 @@ def test_m4_qc_metrics_v2_rejects_all_6_adversarial_clips(tmp_path: Path) -> Non
         assert len(qc["reasons"]) >= 1
 
 
+@pytest.mark.worker
+@pytest.mark.contract
 def test_m0_assemble_i2v_frame_mismatch_hard_fails(tmp_path: Path) -> None:
     """Verifies M0-2 & E7: assemble_from_run_state raises ValueError when an accepted I2V clip has wrong frame count."""
     run_dir = tmp_path / "run_e7"
@@ -349,6 +380,10 @@ def test_m0_assemble_i2v_frame_mismatch_hard_fails(tmp_path: Path) -> None:
         assemble_from_run_state(run_dir, fps=24, target_res=(540, 960))
 
 
+@pytest.mark.worker
+@pytest.mark.contract
+@pytest.mark.api_ui
+@pytest.mark.api
 def test_m3_worker_server_async_jobs_and_health(tmp_path: Path) -> None:
     """Verifies M3-7: workers/server.py `/health` video_providers, `/gpu/free`, and `/render/jobs` lifecycle."""
     tc = TestClient(worker_app)
@@ -394,6 +429,8 @@ def test_m3_worker_server_async_jobs_and_health(tmp_path: Path) -> None:
     assert r_free.status_code == 200
 
 
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_m5_m6_rubric_calibration_and_bakeoff(tmp_path: Path) -> None:
     """Verifies M5 & M6: rubric Krippendorff's alpha, Bradley-Terry ranks, ROC/Youden/5-fold CV calibration,
     and resumable bake-off runner against FakeComfyUI.
@@ -491,6 +528,8 @@ def test_m5_m6_rubric_calibration_and_bakeoff(tmp_path: Path) -> None:
     assert len(comfy_state.prompts_submitted) == submitted_after_first
 
 
+@pytest.mark.contract
+@pytest.mark.worker
 def test_m3_m7_contract_and_tier_configs() -> None:
     """Verifies M3-1 & M7: Python config loader for t0/t1s/t1/t2 and ClipCandidate/QCScores contract."""
     for tier in ("t0", "t1s", "t1", "t2"):
@@ -527,6 +566,9 @@ def test_m3_m7_contract_and_tier_configs() -> None:
     assert dumped["qc_scores"]["metrics_version"] == 2
 
 
+@pytest.mark.worker
+@pytest.mark.eval_qc
+@pytest.mark.eval
 def test_real_world_webtoon_qc_and_ocr_regressions(tmp_path: Path) -> None:
     """Verifies real-world webtoon regressions:
     1) Full-width white top/bottom fade bands are not misdetected as speech bubbles.
@@ -586,3 +628,178 @@ def test_real_world_webtoon_qc_and_ocr_regressions(tmp_path: Path) -> None:
     assert high_nodes[0]["inputs"]["end_at_step"] == 10
     assert low_nodes[0]["inputs"]["start_at_step"] == 10
     assert low_nodes[0]["inputs"]["end_at_step"] == 20
+
+
+@pytest.mark.eval_qc
+@pytest.mark.eval
+@pytest.mark.worker
+def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
+    """Verifies C1: `src/m2a/eval/probe_models.py` model file + SHA-256 verification, ComfyUI probe,
+    short real-render motion/route gate, and slideshow detector (`audit_run_for_slideshow`) that fails
+    loudly when `i2v` panels degrade to `parallax`/`kenburns` or produce frozen frames.
+    """
+    import hashlib
+    from m2a.eval.probe_models import (
+        audit_run_for_slideshow,
+        probe_comfy_server,
+        run_short_real_render,
+        verify_model_files,
+    )
+
+    # 1. Model file + SHA-256 verification
+    models_root = tmp_path / "m2a_models"
+    manifest_data = yaml.safe_load((REPO_ROOT / "workflows" / "comfyui" / "manifest.yaml").read_text(encoding="utf-8"))
+    t1s_spec = manifest_data["models"]["wan22-5b-gguf-q4"]
+    first_dest: Path | None = None
+    for f_entry in t1s_spec["files"]:
+        subdir = f_entry.get("target_dir", "diffusion_models")
+        fname = Path(f_entry["file"]).name
+        dest = models_root / subdir / fname
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        payload = f"model-bytes-{fname}".encode("utf-8")
+        dest.write_bytes(payload)
+        f_entry["sha256"] = hashlib.sha256(payload).hexdigest()
+        if first_dest is None:
+            first_dest = dest
+
+    temp_manifest = tmp_path / "manifest.yaml"
+    temp_manifest.write_text(yaml.safe_dump(manifest_data), encoding="utf-8")
+
+    ok_res = verify_model_files(models_root=models_root, tier="t1s", manifest_path=temp_manifest, verify_sha256=True)
+    assert ok_res["passed"] is True
+    assert len(ok_res["files"]) == 3
+    assert ok_res["missing"] == []
+    assert ok_res["sha_mismatches"] == []
+
+    # Corrupt one file -> must fail SHA-256 verification
+    assert first_dest is not None
+    first_dest.write_bytes(b"corrupted-bytes")
+    bad_res = verify_model_files(models_root=models_root, tier="t1s", manifest_path=temp_manifest, verify_sha256=True)
+    assert bad_res["passed"] is False
+    assert len(bad_res["sha_mismatches"]) == 1
+
+    # 2. ComfyUI server probe & short real render
+    client, _ = _make_inprocess_comfy_client(tmp_path, mode="normal")
+    srv_probe = probe_comfy_server(comfy_url="http://testserver", model_id="wan22-5b-fp8", client=client)
+    assert srv_probe["passed"] is True
+
+    plate = _make_clean_anime_panel(tmp_path / "probe_plate.png", size=(512, 384))
+    render_res = run_short_real_render(
+        comfy_url="http://testserver",
+        model_id="wan22-5b-fp8",
+        sample_image=plate,
+        out_dir=tmp_path / "probe_render",
+        client=client,
+    )
+    assert render_res["passed"] is True, f"Expected probe render pass, got: {render_res}"
+    assert render_res["route_used"] == "i2v"
+    assert render_res["motion_score"] >= 0.02
+
+    # 3. Slideshow detector: fail when an `i2v`-routed panel degrades to `parallax`/`kenburns`
+    degraded_run = tmp_path / "run_degraded"
+    (degraded_run / "clips").mkdir(parents=True)
+    mov_frames = generate_kenburns_frames(plate, target_res=(360, 640), duration_s=1.0, fps=16)
+    clip_ok = encode_mjpeg_avi(mov_frames, degraded_run / "clips" / "p1.avi", fps=16)
+    state_degraded = {
+        "config": {"run_id": "deg_01", "compute_tier": "t1s"},
+        "panels": [
+            {"panel_id": "panel_001", "route": "kenburns", "duration_s": 1.0},
+            {"panel_id": "panel_002", "route": "parallax", "duration_s": 1.0},
+        ],
+        "clip_candidates": {
+            "panel_001": [
+                {
+                    "panel_id": "panel_001",
+                    "path": "",
+                    "take_number": 1,
+                    "route": "i2v",
+                    "accepted": False,
+                    "render_error": "timeout after 900s",
+                },
+                {
+                    "panel_id": "panel_001",
+                    "path": str(clip_ok),
+                    "take_number": 2,
+                    "route": "kenburns",
+                    "accepted": True,
+                    "qc_scores": {"motion_score": 0.12, "overall_pass": True},
+                },
+            ],
+            "panel_002": [
+                {
+                    "panel_id": "panel_002",
+                    "path": "",
+                    "take_number": 1,
+                    "route": "i2v",
+                    "accepted": False,
+                    "render_error": "timeout after 900s",
+                },
+                {
+                    "panel_id": "panel_002",
+                    "path": str(clip_ok),
+                    "take_number": 2,
+                    "route": "parallax",
+                    "accepted": True,
+                    "qc_scores": {"motion_score": 0.15, "overall_pass": True},
+                },
+            ],
+        },
+    }
+    (degraded_run / "state.json").write_text(json.dumps(state_degraded), encoding="utf-8")
+    audit_deg = audit_run_for_slideshow(degraded_run, max_degraded_pct=0.0)
+    assert audit_deg["passed"] is False
+    assert audit_deg["degraded_count"] == 2
+    assert len(audit_deg["degraded_panels"]) == 2
+
+    # 4. Slideshow detector: pass when `i2v` panels genuinely render via `i2v` with real motion
+    real_run = tmp_path / "run_real_i2v"
+    (real_run / "clips").mkdir(parents=True)
+    clip_real = encode_mjpeg_avi(mov_frames, real_run / "clips" / "p1_i2v.avi", fps=16)
+    state_real = {
+        "config": {"run_id": "real_01", "compute_tier": "t1s"},
+        "panels": [{"panel_id": "panel_001", "route": "i2v", "duration_s": 1.0}],
+        "clip_candidates": {
+            "panel_001": [
+                {
+                    "panel_id": "panel_001",
+                    "path": str(clip_real),
+                    "take_number": 1,
+                    "route": "i2v",
+                    "accepted": True,
+                    "qc_scores": {"motion_score": 0.18, "overall_pass": True},
+                }
+            ]
+        },
+    }
+    (real_run / "state.json").write_text(json.dumps(state_real), encoding="utf-8")
+    audit_ok = audit_run_for_slideshow(real_run, max_degraded_pct=0.0)
+    assert audit_ok["passed"] is True, f"Expected real I2V audit pass, got: {audit_ok}"
+
+    # 5. Slideshow detector: fail when an `i2v` clip consists of frozen/repeated frames
+    frozen_run = tmp_path / "run_frozen_i2v"
+    (frozen_run / "clips").mkdir(parents=True)
+    frozen_frames = [Image.open(plate).convert("RGB") for _ in range(16)]
+    clip_frozen = encode_mjpeg_avi(frozen_frames, frozen_run / "clips" / "p1_frozen.avi", fps=16)
+    state_frozen = {
+        "config": {"run_id": "froz_01", "compute_tier": "t1s"},
+        "panels": [{"panel_id": "panel_001", "route": "i2v", "duration_s": 1.0}],
+        "clip_candidates": {
+            "panel_001": [
+                {
+                    "panel_id": "panel_001",
+                    "path": str(clip_frozen),
+                    "take_number": 1,
+                    "route": "i2v",
+                    "accepted": True,
+                    "qc_scores": {"motion_score": 0.0, "overall_pass": True},
+                }
+            ]
+        },
+    }
+    (frozen_run / "state.json").write_text(json.dumps(state_frozen), encoding="utf-8")
+    audit_froz = audit_run_for_slideshow(frozen_run, max_degraded_pct=0.0)
+    assert audit_froz["passed"] is False
+    assert len(audit_froz["frozen_clips"]) == 1
+
+
+

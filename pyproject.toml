@@ -40,3 +40,17 @@ select = ["E", "F", "I"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
+
+[tool.pytest.ini_options]
+pythonpath = [".", "src"]
+addopts = "--strict-markers"
+markers = [
+    "contract: Go <-> Python RunState, config, and deterministic seed parity tests",
+    "worker: Python AI/CV worker, video provider, ComfyUI client, conform, and assembler tests",
+    "eval_qc: Segmentation/understanding evaluation, QC metrics v2, adversarial fixtures, bake-off, rubric, and calibration tests",
+    "eval: Alias for eval_qc evaluation and calibration tests",
+    "api_ui: FastAPI job queue, human checkpoint CP1/CP2 lifecycle, and UI state integration tests",
+    "api: Alias for api_ui job API and checkpoint tests",
+    "gpu: Live GPU / ComfyUI :8188 real-model verification tests (excluded from CPU init.sh gate)",
+]
+
