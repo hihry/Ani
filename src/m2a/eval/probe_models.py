@@ -76,22 +76,52 @@ def resolve_models_dir(explicit_root: Path | None = None, comfy_dir: Path | None
     return c_dir / "models"
 
 
+DEFAULT_MODELS_YAML = REPO_ROOT / "configs" / "models.yaml"
+DEFAULT_VIDEO_MODELS_YAML = REPO_ROOT / "configs" / "video_models.yaml"
+_MODELS_YAML_KEY_MAP = {
+    "wan22-5b-fp8": "wan22-ti2v-5b",
+    "wan22-a14b-fp8": "wan22-i2v-a14b",
+    "ltx23-fp8": "ltx23",
+    "hunyuan15-fp8": "hunyuan15",
+}
+
+
 def verify_model_files(
     tier: str | None = "t1s",
     model_id: str | None = None,
     models_root: Path | None = None,
     manifest_path: Path = DEFAULT_MANIFEST,
+    models_yaml_path: Path | None = None,
     verify_sha256: bool = True,
     full_hash_on_fuse: bool = False,
 ) -> Dict[str, Any]:
     """Verifies that all required model files for the tier/model exist on disk with valid SHA-256."""
     manifest = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8")) or {}
     models_map = manifest.get("models", {})
+
+    eff_models_yaml = models_yaml_path or (DEFAULT_MODELS_YAML if Path(manifest_path) == DEFAULT_MANIFEST else None)
+    models_cfg: Dict[str, Any] = {}
+    if eff_models_yaml and Path(eff_models_yaml).is_file():
+        models_cfg = yaml.safe_load(Path(eff_models_yaml).read_text(encoding="utf-8")) or {}
+
+    video_models_cfg: Dict[str, Any] = {}
+    if DEFAULT_VIDEO_MODELS_YAML.is_file():
+        vm_doc = yaml.safe_load(DEFAULT_VIDEO_MODELS_YAML.read_text(encoding="utf-8")) or {}
+        video_models_cfg = vm_doc.get("models", {}) if isinstance(vm_doc, dict) else {}
+
     selected: List[tuple[str, Dict[str, Any]]] = []
     for mid, spec in models_map.items():
         if model_id and mid != model_id:
             continue
         if tier and not model_id and spec.get("tier") != tier:
+            continue
+        cfg_key = _MODELS_YAML_KEY_MAP.get(mid, mid)
+        is_disabled = (
+            spec.get("enabled") is False
+            or video_models_cfg.get(mid, {}).get("enabled") is False
+            or models_cfg.get(cfg_key, {}).get("enabled") is False
+        )
+        if is_disabled and not model_id:
             continue
         selected.append((mid, spec))
 
@@ -110,7 +140,9 @@ def verify_model_files(
     sha_mismatches: List[Dict[str, str]] = []
 
     for mid, spec in selected:
-        for f_entry in spec.get("files", []):
+        cfg_key = _MODELS_YAML_KEY_MAP.get(mid, mid)
+        cfg_primary_sha = str(models_cfg.get(cfg_key, {}).get("sha256") or "").strip().lower()
+        for f_idx, f_entry in enumerate(spec.get("files", [])):
             subdir = f_entry.get("target_dir", "diffusion_models")
             fname = Path(f_entry["file"]).name
             dest = root_dir / subdir / fname
@@ -121,6 +153,16 @@ def verify_model_files(
             actual_sha: str | None = None
             sha_source = "none"
             sha_ok = True
+
+            if f_idx == 0 and cfg_primary_sha and expected_sha and cfg_primary_sha != expected_sha:
+                sha_ok = False
+                sha_mismatches.append(
+                    {
+                        "file": f"{dest} (configs/models.yaml vs manifest.yaml)",
+                        "expected": cfg_primary_sha,
+                        "actual": expected_sha,
+                    }
+                )
 
             if not exists or size_bytes <= 0:
                 missing_files.append(str(dest))
@@ -506,7 +548,10 @@ def audit_run_for_slideshow(
         accepted_i2v.append(pid)
         frames = decode_video_frames(clip_file)
         fstats = compute_frozen_frame_stats(frames)
-        if fstats["frozen_ratio"] > max_frozen_ratio:
+        cand_qc = accepted_cand.get("qc_scores", {}) if isinstance(accepted_cand, dict) else {}
+        cand_motion = cand_qc.get("motion_score") if isinstance(cand_qc, dict) else None
+        low_motion = cand_motion is not None and float(cand_motion) < 0.02
+        if fstats["frozen_ratio"] > max_frozen_ratio or low_motion:
             frozen_clips.append(
                 {
                     "panel_id": pid,
@@ -514,6 +559,7 @@ def audit_run_for_slideshow(
                     "frozen_ratio": fstats["frozen_ratio"],
                     "frozen_pairs": fstats["frozen_pairs"],
                     "num_pairs": fstats["num_pairs"],
+                    "motion_score": float(cand_motion) if cand_motion is not None else None,
                 }
             )
 
@@ -532,7 +578,7 @@ def audit_run_for_slideshow(
             f"(max allowed: {max_degraded_pct:.1f}%): {degraded_panels}"
         )
     if frozen_clips:
-        reasons.append(f"{len(frozen_clips)} accepted i2v clip(s) exceed frozen frame threshold: {frozen_clips}")
+        reasons.append(f"{len(frozen_clips)} accepted i2v clip(s) exceed frozen frame or minimum motion threshold: {frozen_clips}")
 
     return {
         "passed": len(reasons) == 0,
@@ -560,7 +606,13 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--check-run", type=Path, default=None, help="Audit a finished run directory for slideshow degradation")
     parser.add_argument("--max-degraded-pct", type=float, default=0.0, help="Max allowed %% of i2v panels degraded to pan/zoom")
     parser.add_argument("--files-only", action="store_true", help="Only verify model files on disk")
-    parser.add_argument("--full-sha256", action="store_true", help="Stream full SHA-256 even on cloud FUSE mounts")
+    parser.add_argument(
+        "--full-hash",
+        "--full-sha256",
+        dest="full_sha256",
+        action="store_true",
+        help="Stream full SHA-256 even on cloud FUSE mounts",
+    )
     args = parser.parse_args(argv)
 
     overall_ok = True
@@ -573,7 +625,7 @@ def main(argv: List[str] | None = None) -> int:
             print(f"FAIL: Slideshow / I2V degradation detected in {args.check_run}", file=sys.stderr)
             return 1
         print(f"PASS: Run {args.check_run} has {run_report['accepted_i2v_count']}/{run_report['planned_i2v_count']} valid I2V clips.")
-        if args.files_only:
+        if not args.files_only and args.model is None:
             return 0
 
     target_model = args.model or ("wan22-5b-gguf-q4" if args.tier == "t1s" else ("wan22-5b-fp8" if args.tier == "t1" else "wan22-a14b-fp8"))

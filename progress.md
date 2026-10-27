@@ -55,12 +55,13 @@
 - [x] Full master suite passes: `./init.sh` -> `go vet ./...` (`exit 0`), `go build -o m2a ./cmd/m2a` (`exit 0`), `go test ./...` (5 packages with tests / 29 Go tests PASS), `compileall` (`exit 0`), `python3 -m pytest tests/ -q` (`45 passed in 33.94s`)
 - [x] Domain harnesses pass with strict markers:
   - `./harnesses/go-control-plane/init.sh` -> `9 passed, 36 deselected` (`-m contract`)
-  - `./harnesses/python-worker/init.sh --quick` -> `11 passed, 1 deselected` (`tests/test_phase3.py -m worker`)
+  - `./harnesses/python-worker/init.sh` -> `40 passed, 5 deselected` (`-m worker`) and `--quick` -> `13 passed, 32 deselected` (includes `test_worker_fastapi_endpoints` & `test_zero_ground_truth_leakage_in_production_code`)
   - `./harnesses/eval-bakeoff/init.sh` -> `F1=1.0000, Mean IoU=0.9968` + `16 passed, 29 deselected` (`-m eval_qc`)
   - `./harnesses/api-ui/init.sh` -> `8 passed, 37 deselected` (`-m api_ui`)
 - [x] Real-model probe & slideshow detector verified:
   - `./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only` -> `exit 0` (3 `wan22-5b-gguf-q4` files + SHA-256 verified)
   - `./harnesses/eval-bakeoff/probe-models.sh --tier t1s` -> `exit 1` (fails closed because ComfyUI `:8188` is offline)
+  - `./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_dramatic_01` -> `exit 0` (passes with `3/3` valid I2V clips)
   - `./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01` -> `exit 1` (detects `2/2` `i2v` panels degraded to `kenburns`/`parallax`)
 - [x] Harness validation passes: `./harnesses/validate-all.sh` -> `exit 0` (`100/100` root score + 4 domain harnesses + zero duplicate state files + machine guards)
 

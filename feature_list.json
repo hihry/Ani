@@ -25,7 +25,7 @@
       "dependencies": ["feat-002"],
       "harness": "harnesses/eval-bakeoff",
       "status": "done",
-      "evidence": "python3 -m pytest tests/test_phase3.py -q (12 passed, including 100% rejection across all 6 adversarial QC fixture types and test_probe_models_and_slideshow_detector); ./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only (PASS: 3 wan22-5b-gguf-q4 files + SHA-256 verified on /run/media/hihry/OS/m2a_models); ./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01 (correctly exited 1 catching 2/2 i2v panels degraded to kenburns/parallax)"
+      "evidence": "python3 -m pytest tests/test_phase3.py -q (12 passed, including 100% rejection across all 6 adversarial QC fixture types and test_probe_models_and_slideshow_detector); ./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only (PASS: 3 wan22-5b-gguf-q4 files + SHA-256 verified on /run/media/hihry/OS/m2a_models); ./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_dramatic_01 (PASS: exit 0, 3/3 valid I2V clips); ./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01 (FAIL-CLOSED: exit 1 catching 2/2 i2v panels degraded to kenburns/parallax)"
     },
     {
       "id": "feat-004",

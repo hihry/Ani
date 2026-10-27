@@ -224,7 +224,91 @@ def test_clean_plate_and_tts_synthesis(tmp_path: Path):
 @pytest.mark.api_ui
 @pytest.mark.api
 def test_go_state_json_interoperability(tmp_path: Path):
-    """Verifies that Python RunState loads state.json cleanly and rejects out-of-range durations."""
+    """Verifies that Python RunState loads Go-serialized state.json cleanly and rejects out-of-range durations."""
+    from pydantic import ValidationError
+
+    go_run_dir = tmp_path / "go_interop_run"
+    go_run_dir.mkdir(parents=True)
+    go_state_doc = {
+        "config": {
+            "run_id": "go-contract-001",
+            "config_hash": "deadbeef1234",
+            "source_pages": ["data/eval/sample_page_1.png"],
+            "source_language": "ko",
+            "output_resolution": [720, 1280],
+            "compute_tier": "t1s",
+            "created_at": "2026-10-27T12:00:00Z",
+        },
+        "current_stage": "DONE",
+        "panels": [
+            {
+                "panel_id": "panel_001",
+                "bbox": {"x": 40, "y": 60, "w": 720, "h": 500},
+                "shot": "close_up",
+                "characters": [{"id": "char_jin", "name": "Jin", "emotion": "determined", "pose": "standing"}],
+                "action": "Jin faces the gate.",
+                "dialogue": [{"speaker_id": "char_jin", "text": "Arise.", "lang": "en", "emotion": "serious"}],
+                "sfx": [],
+                "motion_prompt": "subtle push-in",
+                "style_anchor": "2D anime",
+                "motion_intensity": 0.65,
+                "route": "i2v",
+                "duration_s": 3.5,
+            }
+        ],
+        "clean_plate_paths": {"panel_001": "runs\\go-contract-001\\clean_plates\\panel_001_clean.png"},
+        "clip_candidates": {
+            "panel_001": [
+                {
+                    "panel_id": "panel_001",
+                    "path": "runs/go-contract-001/clips/panel_001_take01_i2v.avi",
+                    "take_number": 1,
+                    "route": "i2v",
+                    "model_id": "wan22-5b-gguf-q4",
+                    "seed": 12345,
+                    "qc_scores": {
+                        "identity_similarity": 0.92,
+                        "new_text_count": 0,
+                        "flicker_score": 0.03,
+                        "motion_score": 0.18,
+                        "warp_error": 0.02,
+                        "first_frame_fidelity": 0.91,
+                        "style_drift": 0.05,
+                        "metrics_version": 2,
+                        "overall_pass": True,
+                    },
+                    "accepted": True,
+                }
+            ]
+        },
+        "stage_history": [{"stage": "INGEST", "entered_at": "2026-10-27T12:00:01Z"}],
+        "cost_ledger": {"total_gpu_seconds": 14.2, "per_model_seconds": {"wan22-5b-gguf-q4": 14.2}},
+    }
+    (go_run_dir / "state.json").write_text(json.dumps(go_state_doc), encoding="utf-8")
+    loaded = RunState.load(go_run_dir)
+    assert loaded.config.output_resolution == [720, 1280]
+    assert len(loaded.panels) == 1
+    assert loaded.panels[0].route == "i2v"
+    assert "\\" not in loaded.clean_plate_paths["panel_001"]
+    assert loaded.clip_candidates["panel_001"][0].model_id == "wan22-5b-gguf-q4"
+
+    # Out-of-range duration_s (> 10.0) and unsupported lang ('zh') must fail validation (P0-04)
+    bad_dur_dir = tmp_path / "bad_dur_run"
+    bad_dur_dir.mkdir(parents=True)
+    bad_doc = json.loads(json.dumps(go_state_doc))
+    bad_doc["panels"][0]["duration_s"] = 12.3
+    (bad_dur_dir / "state.json").write_text(json.dumps(bad_doc), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        RunState.load(bad_dur_dir)
+
+    bad_lang_dir = tmp_path / "bad_lang_run"
+    bad_lang_dir.mkdir(parents=True)
+    bad_lang_doc = json.loads(json.dumps(go_state_doc))
+    bad_lang_doc["panels"][0]["dialogue"][0]["lang"] = "zh"
+    (bad_lang_dir / "state.json").write_text(json.dumps(bad_lang_doc), encoding="utf-8")
+    with pytest.raises(ValidationError):
+        RunState.load(bad_lang_dir)
+
     existing_run = ROOT / "runs" / "396d8463-dbfb-4263-b474-d9c558263b20"
     if (existing_run / "state.json").exists():
         state = RunState.load(existing_run)
@@ -1017,7 +1101,7 @@ def test_zero_ground_truth_leakage_in_production_code():
             if p.parent == ROOT / "workers" and p.name.startswith("eval_"):
                 continue
             text = p.read_text(encoding="utf-8", errors="ignore")
-            if "ground_truth.json" in text or "_load_eval_ground_truth" in text:
+            if "ground_truth.json" in text or "_load_eval_ground_truth" in text or "M2A_EVAL_ORACLE" in text:
                 violations.append(str(p.relative_to(ROOT)))
     assert violations == [], f"Ground-truth leakage detected in production files: {violations}"
 

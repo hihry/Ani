@@ -23,8 +23,8 @@ echo "=== 1. Python Syntax & Bytecode Check (workers, src/m2a, tests) ==="
 python3 -m compileall -q workers src/m2a tests
 
 if [[ "$MODE" == "quick" ]]; then
-  echo "=== 2. Fast Worker & Video Provider Unit Smoke Tests (tests/test_phase3.py -m worker) ==="
-  python3 -m pytest tests/test_phase3.py -m "worker" -q
+  echo "=== 2. Fast Worker, FastAPI Endpoints & Video Provider Smoke Tests (-m worker) ==="
+  python3 -m pytest tests/test_phase3.py tests/test_pipeline.py::test_worker_fastapi_endpoints tests/test_pipeline.py::test_zero_ground_truth_leakage_in_production_code -m "worker" -q
   echo ""
   echo "[NOTE] '--quick' is a smoke check only; run './harnesses/python-worker/init.sh' (full) and './init.sh' before claiming done."
 else

@@ -22,12 +22,13 @@
 | Master Harness (Full) | `./init.sh` | PASS (exit 0) | `guards.sh` + `go vet` + `go build -o m2a` + `go test ./...` (5 pkgs / 29 tests) + `compileall` + `pytest tests/ -q` (`45 passed`) |
 | Master Harness (Quick Smoke) | `rm -f data/eval/sample_page_*.png && ./init.sh --quick` | PASS (exit 0) | Auto-generated missing `sample_page_1..3.png` + ran `-m contract` (`9 passed, 36 deselected`) |
 | Go Control Plane Harness | `./harnesses/go-control-plane/init.sh` | PASS (exit 0) | `go vet` + `go test` + `go build` + `pytest -m contract` (`9 passed`) |
-| Python Worker Harness | `./harnesses/python-worker/init.sh --quick` | PASS (exit 0) | `guards.sh` + `compileall` + `pytest tests/test_phase3.py -m worker` (`11 passed`) |
+| Python Worker Harness (Full & Quick) | `./harnesses/python-worker/init.sh` / `--quick` | PASS (exit 0) | Full: `40 passed` (`-m worker`); Quick: `13 passed` (incl. `test_worker_fastapi_endpoints` & GT guard) |
 | Eval & Bake-off Harness | `./harnesses/eval-bakeoff/init.sh` | PASS (exit 0) | `eval_segmentation.py` (`F1=1.0000`, `IoU=0.9968`) + `pytest -m eval_qc` (`16 passed`) |
 | API & Review UI Harness | `./harnesses/api-ui/init.sh` | PASS (exit 0) | `compileall` + `pytest -m api_ui` (`8 passed`) |
 | Real-Model Files & SHA-256 Probe | `./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only` | PASS (exit 0) | Verified all 3 `wan22-5b-gguf-q4` files + SHA-256 on `/run/media/hihry/OS/m2a_models` (with `rclone` mount warning) |
 | Live ComfyUI `:8188` Probe | `./harnesses/eval-bakeoff/probe-models.sh --tier t1s` | FAIL-CLOSED (exit 1) | Expected: ComfyUI `:8188` is offline (`Connection refused`) |
-| Anti-Slideshow Run Audit | `./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01` | FAIL-CLOSED (exit 1) | Expected: detected `2/2 (100.0%)` `i2v` panels (`panel_001`, `panel_018`) degraded to `kenburns`/`parallax` |
+| Anti-Slideshow Run Audit (Valid I2V) | `./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_dramatic_01` | PASS (exit 0) | Verified `3/3` accepted `wan22-5b-gguf-q4` I2V clips with zero frozen frames |
+| Anti-Slideshow Run Audit (Degraded) | `./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01` | FAIL-CLOSED (exit 1) | Expected: detected `2/2 (100.0%)` `i2v` panels (`panel_001`, `panel_018`) degraded to `kenburns`/`parallax` |
 | All-Harness Structural Validator | `./harnesses/validate-all.sh` | PASS (exit 0) | Root `100/100` + 4 domain harnesses + zero duplicate state files + `guards.sh` |
 
 ## Files Changed

@@ -822,18 +822,6 @@ def call_vlm_http_endpoint(
         return None
 
 
-def _bbox_iou(box_a: Dict[str, int], box_b: Dict[str, int]) -> float:
-    x1 = max(int(box_a["x"]), int(box_b["x"]))
-    y1 = max(int(box_a["y"]), int(box_b["y"]))
-    x2 = min(int(box_a["x"]) + int(box_a["w"]), int(box_b["x"]) + int(box_b["w"]))
-    y2 = min(int(box_a["y"]) + int(box_a["h"]), int(box_b["y"]) + int(box_b["h"]))
-    if x2 <= x1 or y2 <= y1:
-        return 0.0
-    inter = float((x2 - x1) * (y2 - y1))
-    union = float(int(box_a["w"]) * int(box_a["h"]) + int(box_b["w"]) * int(box_b["h"])) - inter
-    return inter / union if union > 0.0 else 0.0
-
-
 def analyze_panel(
     panel_image_path: Path,
     panel_id: str,
@@ -848,9 +836,8 @@ def analyze_panel(
     Combines:
       1. Real morphological speech-bubble & SFX detection (`detect_speech_bubbles_and_text`),
       2. Optional VLM HTTP inference (`call_vlm_http_endpoint`) or local OCR + stroke topology,
-      3. Optional ground-truth verification when explicitly enabled via `M2A_EVAL_ORACLE=1`,
-      4. Tight character reference crop extraction (`<run_dir>/understanding/crops/<panel_id>_<char_id>.png`),
-      5. Annotated visual overlay generation (`<run_dir>/understanding/<panel_id>_annotated.png`).
+      3. Tight character reference crop extraction (`<run_dir>/understanding/crops/<panel_id>_<char_id>.png`),
+      4. Annotated visual overlay generation (`<run_dir>/understanding/<panel_id>_annotated.png`).
     """
     panel_image_path = Path(panel_image_path)
     if img is None:

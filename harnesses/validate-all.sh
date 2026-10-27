@@ -29,6 +29,18 @@ if [[ ! -x "$REPO_ROOT/init.sh" ]]; then
   echo "FAIL: Root init.sh is not executable"
   exit 1
 fi
+for section in "## Startup Workflow" "## Working Rules" "## Required Artifacts" "## Definition of Done" "## End of Session" "## Verification Commands" "## Escalation"; do
+  if ! grep -Fq "$section" "$REPO_ROOT/AGENTS.md"; then
+    echo "FAIL: Root AGENTS.md missing required section: $section"
+    exit 1
+  fi
+done
+for ptr in CLAUDE.md GEMINI.md; do
+  if ! grep -Fq "AGENTS.md" "$REPO_ROOT/$ptr"; then
+    echo "FAIL: $ptr must point to AGENTS.md"
+    exit 1
+  fi
+done
 python3 -c '
 import json, pathlib, sys
 data = json.loads(pathlib.Path("feature_list.json").read_text(encoding="utf-8"))

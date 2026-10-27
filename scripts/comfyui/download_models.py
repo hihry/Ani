@@ -31,6 +31,8 @@ def select_models(manifest: Dict[str, Any], tier: str | None, model_id: str | No
             continue
         if tier and spec.get("tier") != tier:
             continue
+        if not model_id and spec.get("enabled") is False:
+            continue
         selected.append((mid, spec))
     return selected
 

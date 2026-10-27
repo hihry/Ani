@@ -641,6 +641,7 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     import hashlib
     from m2a.eval.probe_models import (
         audit_run_for_slideshow,
+        main as probe_main,
         probe_comfy_server,
         run_short_real_render,
         verify_model_files,
@@ -670,6 +671,37 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     assert len(ok_res["files"]) == 3
     assert ok_res["missing"] == []
     assert ok_res["sha_mismatches"] == []
+
+    # Verify tier="t1" skips disabled hunyuan15-fp8 (enabled: false)
+    for mid in ("wan22-5b-fp8", "ltx23-fp8"):
+        for f_entry in manifest_data["models"][mid]["files"]:
+            subdir = f_entry.get("target_dir", "diffusion_models")
+            fname = Path(f_entry["file"]).name
+            dest = models_root / subdir / fname
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            payload = f"model-bytes-{fname}".encode("utf-8")
+            dest.write_bytes(payload)
+            f_entry["sha256"] = hashlib.sha256(payload).hexdigest()
+    temp_manifest.write_text(yaml.safe_dump(manifest_data), encoding="utf-8")
+    t1_res = verify_model_files(models_root=models_root, tier="t1", manifest_path=temp_manifest, verify_sha256=True)
+    assert t1_res["passed"] is True
+    assert {f["model_id"] for f in t1_res["files"]} == {"wan22-5b-fp8", "ltx23-fp8"}
+
+    # Verify models.yaml SHA-256 cross-check catches drift between models.yaml and manifest.yaml
+    bad_models_yaml = tmp_path / "models.yaml"
+    bad_models_yaml.write_text(
+        yaml.safe_dump({"wan22-5b-gguf-q4": {"enabled": True, "sha256": "0" * 64}}),
+        encoding="utf-8",
+    )
+    drift_res = verify_model_files(
+        models_root=models_root,
+        tier="t1s",
+        manifest_path=temp_manifest,
+        models_yaml_path=bad_models_yaml,
+        verify_sha256=True,
+    )
+    assert drift_res["passed"] is False
+    assert len(drift_res["sha_mismatches"]) == 1
 
     # Corrupt one file -> must fail SHA-256 verification
     assert first_dest is not None
@@ -750,6 +782,7 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     assert audit_deg["passed"] is False
     assert audit_deg["degraded_count"] == 2
     assert len(audit_deg["degraded_panels"]) == 2
+    assert probe_main(["--check-run", str(degraded_run)]) == 1
 
     # 4. Slideshow detector: pass when `i2v` panels genuinely render via `i2v` with real motion
     real_run = tmp_path / "run_real_i2v"
@@ -774,8 +807,10 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     (real_run / "state.json").write_text(json.dumps(state_real), encoding="utf-8")
     audit_ok = audit_run_for_slideshow(real_run, max_degraded_pct=0.0)
     assert audit_ok["passed"] is True, f"Expected real I2V audit pass, got: {audit_ok}"
+    # Standalone CLI `--check-run` must return 0 on a passing run even when ComfyUI :8188 is offline
+    assert probe_main(["--check-run", str(real_run)]) == 0
 
-    # 5. Slideshow detector: fail when an `i2v` clip consists of frozen/repeated frames
+    # 5. Slideshow detector: fail when an `i2v` clip consists of frozen/repeated frames or low optical-flow motion
     frozen_run = tmp_path / "run_frozen_i2v"
     (frozen_run / "clips").mkdir(parents=True)
     frozen_frames = [Image.open(plate).convert("RGB") for _ in range(16)]
@@ -800,6 +835,7 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     audit_froz = audit_run_for_slideshow(frozen_run, max_degraded_pct=0.0)
     assert audit_froz["passed"] is False
     assert len(audit_froz["frozen_clips"]) == 1
+    assert probe_main(["--check-run", str(frozen_run)]) == 1
 
 
 

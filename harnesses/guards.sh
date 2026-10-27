@@ -31,7 +31,7 @@ fi
 echo "  [OK] Toolchain preflight (go$GO_VER, $(python3 --version 2>&1), ffmpeg present)"
 
 # 2. Zero Ground-Truth Leakage in Production Code
-LEAK_FILES="$(grep -rnE "ground_truth\.json|_load_eval_ground_truth" \
+LEAK_FILES="$(grep -rnE "ground_truth\.json|_load_eval_ground_truth|M2A_EVAL_ORACLE" \
   workers/ src/m2a/nodes/ src/m2a/providers/ internal/ cmd/ api/ ui/ \
   --exclude="eval_*.py" \
   --exclude-dir="__pycache__" 2>/dev/null || true)"
@@ -52,13 +52,21 @@ if [[ -n "$TRACKED_FORBIDDEN" ]]; then
 fi
 echo "  [OK] Zero tracked model weights or runs/ artifacts in git index"
 
-# 4. License Guard: hunyuan15.enabled must be false in configs/models.yaml
+# 4. License Guard: hunyuan15.enabled must be false in configs/models.yaml, configs/video_models.yaml, and workflows/comfyui/manifest.yaml
 python3 -c '
 import sys, yaml
 from pathlib import Path
-data = yaml.safe_load(Path("configs/models.yaml").read_text(encoding="utf-8"))
-if data.get("hunyuan15", {}).get("enabled") is not False:
+m_data = yaml.safe_load(Path("configs/models.yaml").read_text(encoding="utf-8"))
+v_data = yaml.safe_load(Path("configs/video_models.yaml").read_text(encoding="utf-8")).get("models", {})
+w_data = yaml.safe_load(Path("workflows/comfyui/manifest.yaml").read_text(encoding="utf-8")).get("models", {})
+if m_data.get("hunyuan15", {}).get("enabled") is not False:
     print("FAIL: hunyuan15.enabled must remain False in configs/models.yaml (EU/UK/KR license exclusion)", file=sys.stderr)
     sys.exit(1)
+if v_data.get("hunyuan15", {}).get("enabled") is not False or v_data.get("hunyuan15-fp8", {}).get("enabled") is not False:
+    print("FAIL: hunyuan15/hunyuan15-fp8 must remain enabled=False in configs/video_models.yaml", file=sys.stderr)
+    sys.exit(1)
+if w_data.get("hunyuan15-fp8", {}).get("enabled") is not False:
+    print("FAIL: hunyuan15-fp8 must remain enabled=False in workflows/comfyui/manifest.yaml", file=sys.stderr)
+    sys.exit(1)
 '
-echo "  [OK] License guard (hunyuan15.enabled == false)"
+echo "  [OK] License guard (hunyuan15.enabled == false across all manifests)"
