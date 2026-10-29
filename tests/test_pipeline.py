@@ -402,9 +402,51 @@ def test_job_api_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert full_st.status_code == 200
     assert full_st.json()["config"]["run_id"] == job_id
 
+    insp = client.get(f"/jobs/{job_id}/inspect")
+    assert insp.status_code == 200
+    assert job_id in insp.json()["report"]
+    assert "PIPELINE RUN INSPECTION" in insp.json()["report"]
+
     canc = client.delete(f"/jobs/{job_id}")
     assert canc.status_code == 200
     assert client.get(f"/jobs/{job_id}").json()["current_stage"] == "FAILED"
+
+    # Submit a real 1-page job that pauses at CHECKPOINT_1 via the Go m2a engine, then edit & save CP1 via API
+    page_img = Image.new("RGB", (800, 640), (255, 255, 255))
+    draw = ImageDraw.Draw(page_img)
+    draw.rectangle([40, 50, 760, 580], fill=(85, 145, 210), outline=(20, 20, 24), width=4)
+    draw.rounded_rectangle([80, 90, 360, 155], radius=12, fill=(255, 255, 255), outline=(40, 40, 45), width=3)
+    draw.text((100, 110), "API checkpoint test.", fill=(20, 20, 20))
+    page_file = tmp_path / "api_page.png"
+    page_img.save(page_file)
+
+    sub_real = client.post(
+        "/jobs",
+        json={
+            "source_pages": [str(page_file)],
+            "source_language": "en",
+            "compute_tier": "t0",
+            "auto_approve": False,
+            "config": {"composition": {"resolution": [180, 320], "fps": 8}},
+        },
+    )
+    assert sub_real.status_code == 200
+    real_id = sub_real.json()["job_id"]
+    assert sub_real.json()["current_stage"] == "CHECKPOINT_1"
+    assert sub_real.json()["panels_count"] == 1
+
+    st_doc = client.get(f"/jobs/{real_id}/state").json()
+    panels = st_doc["panels"]
+    panels[0]["dialogue"][0]["text"] = "Edited via PUT checkpoint!"
+    cp_resp = client.put(
+        f"/jobs/{real_id}/checkpoint",
+        json={"panels": panels, "resume_after_save": False},
+    )
+    assert cp_resp.status_code == 200
+    saved_panel_json = json.loads(
+        (tmp_path / "runs" / real_id / "understanding" / "panel_001.json").read_text(encoding="utf-8")
+    )
+    assert saved_panel_json["dialogue"][0]["text"] == "Edited via PUT checkpoint!"
 
 
 @pytest.mark.eval_qc
@@ -960,8 +1002,9 @@ def test_phase2_cp2_preserves_tts_duration_and_syncs_route_edits(tmp_path: Path)
     # Verify routes/routing_plan.json has the updated TTS duration and edit route to parallax at CP2
     plan_file = run_dir / "routes" / "routing_plan.json"
     plan_data = json.loads(plan_file.read_text(encoding="utf-8"))
-    assert plan_data[0]["duration_s"] == tts_dur
-    plan_data[0]["route"] = "parallax"
+    plan_panels = plan_data["panels"] if isinstance(plan_data, dict) else plan_data
+    assert plan_panels[0]["duration_s"] == tts_dur
+    plan_panels[0]["route"] = "parallax"
     plan_file.write_text(json.dumps(plan_data, indent=2), encoding="utf-8")
 
     state = graph.resume(state)
@@ -1104,6 +1147,105 @@ def test_zero_ground_truth_leakage_in_production_code():
             if "ground_truth.json" in text or "_load_eval_ground_truth" in text or "M2A_EVAL_ORACLE" in text:
                 violations.append(str(p.relative_to(ROOT)))
     assert violations == [], f"Ground-truth leakage detected in production files: {violations}"
+
+
+@pytest.mark.worker
+def test_streaming_assembly_bounded_memory_and_subtitle_overlay(tmp_path: Path):
+    """Verifies feat-006: StreamingMjpegAviWriter, count_video_frames, and assemble_clips_streaming stream clips without full in-memory decoding."""
+    from workers.assembler import (
+        StreamingMjpegAviWriter,
+        assemble_clips_streaming,
+        count_video_frames,
+        iter_video_frames,
+    )
+
+    clip1_path = tmp_path / "panel_001.avi"
+    clip2_path = tmp_path / "panel_002.avi"
+    res = (180, 320)
+
+    with StreamingMjpegAviWriter(clip1_path, fps=8) as w1:
+        for i in range(12):
+            w1.write_frame(Image.new("RGB", res, (40 + i * 5, 90, 180)))
+
+    with StreamingMjpegAviWriter(clip2_path, fps=8) as w2:
+        for i in range(12):
+            w2.write_frame(Image.new("RGB", res, (180, 70 + i * 5, 90)))
+
+    assert count_video_frames(clip1_path) == 12
+    assert count_video_frames(clip2_path) == 12
+    streamed = list(iter_video_frames(clip1_path, target_res=res))
+    assert len(streamed) == 12
+
+    out_base = tmp_path / "streamed_final"
+    result = assemble_clips_streaming(
+        panel_clip_specs=[
+            {
+                "clip_path": clip1_path,
+                "dialogue": [{"speaker_id": "char_jin", "text": "Streaming subtitle overlay!"}],
+                "subtitle_burned": False,
+                "frames": 12,
+            },
+            {
+                "clip_path": clip2_path,
+                "dialogue": [],
+                "subtitle_burned": True,
+                "frames": 12,
+            },
+        ],
+        output_base_path=out_base,
+        fps=8,
+        target_res=res,
+        transition_frames=4,
+    )
+    assert result["total_frames"] == 20  # 12 + 12 - 4 crossfade overlap
+    assert Path(result["avi_path"]).is_file()
+    assert Path(result["webp_path"]).is_file()
+    assert count_video_frames(Path(result["avi_path"])) == 20
+
+
+@pytest.mark.contract
+@pytest.mark.worker
+def test_model_residency_lifecycle_and_needs_review_contract(tmp_path: Path):
+    """Verifies feat-010: ModelResidencyManager unloads previous heavy model on switch and PanelJSON.needs_review round-trips."""
+    from m2a.state import BBox, PanelJSON
+    from workers.server import ModelResidencyManager
+
+    mgr = ModelResidencyManager(models_dir=tmp_path)
+    events: list[str] = []
+
+    mgr.register_model(
+        "qwen3-vl",
+        loader=lambda: {"name": "qwen3-vl", "vram_gb": 6.5},
+        unloader=lambda inst: events.append(f"unload:{inst['name']}"),
+    )
+    mgr.register_model(
+        "comfyui:wan22-ti2v-5b",
+        loader=lambda: {"name": "comfyui:wan22-ti2v-5b", "vram_gb": 10.2},
+        unloader=lambda inst: events.append(f"unload:{inst['name']}"),
+    )
+
+    with mgr.acquire("qwen3-vl") as h1:
+        assert h1["name"] == "qwen3-vl"
+        assert mgr.resident_model == "qwen3-vl"
+        assert "qwen3-vl" in mgr.loaded_models()
+
+    with mgr.acquire("comfyui:wan22-ti2v-5b") as h2:
+        assert h2["name"] == "comfyui:wan22-ti2v-5b"
+        assert mgr.resident_model == "comfyui:wan22-ti2v-5b"
+        assert events == ["unload:qwen3-vl"]
+
+    mgr.free_all()
+    assert mgr.resident_model is None
+    assert events == ["unload:qwen3-vl", "unload:comfyui:wan22-ti2v-5b"]
+
+    panel = PanelJSON(
+        panel_id="panel_001",
+        bbox=BBox(x=0, y=0, w=720, h=400),
+        needs_review=True,
+    )
+    dumped = json.loads(panel.model_dump_json())
+    assert dumped["needs_review"] is True
+
 
 
 

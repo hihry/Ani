@@ -30,9 +30,11 @@ try:
         analyze_panel,
     )
     from workers.assembler import (
+        assemble_clips_streaming,
         assemble_timeline,
         burn_subtitle_on_frames,
         compute_clip_qc_metrics,
+        count_video_frames,
         decode_video_frames,
         encode_mjpeg_avi,
         inpaint_panel_bubbles,
@@ -48,9 +50,11 @@ except ImportError:
         analyze_panel,
     )
     from assembler import (
+        assemble_clips_streaming,
         assemble_timeline,
         burn_subtitle_on_frames,
         compute_clip_qc_metrics,
+        count_video_frames,
         decode_video_frames,
         encode_mjpeg_avi,
         inpaint_panel_bubbles,
@@ -265,8 +269,8 @@ def assemble_from_run_state(
     transition_frames = min(8, max(2, fps // 3))
     overlap_s = transition_frames / float(max(1, fps))
 
-    clips: List[List[Image.Image]] = []
-    panel_meta: List[Tuple[Dict[str, Any], Path, float]] = []
+    panel_clip_specs: List[Dict[str, Any]] = []
+    panel_meta: List[Tuple[Dict[str, Any], Path, float, int]] = []
 
     for idx, p in enumerate(panels):
         pid = p.get("panel_id", f"panel_{idx + 1:03d}")
@@ -280,41 +284,47 @@ def assemble_from_run_state(
             source_img_path = run_dir / "panels" / f"{pid}.png"
 
         expected_frames = max(1, int(round(duration_s * fps)))
-        frames: List[Image.Image] = []
+        clip_path: Optional[Path] = None
+        frame_count = 0
+        subtitle_burned = False
 
-        # 1. Reuse QC-accepted clip from GENERATE/QC when frame count matches (P1-01 / O1)
+        # 1. Reuse QC-accepted clip from GENERATE/QC when frame count matches (P1-01 / O1 / feat-006)
+        #    Inspects header frame count in O(1) memory without decoding full RGB frames into RAM.
         #    For accepted I2V clips (M0-2 / E7), a frame count mismatch (> 2 frames) is a hard error
         #    and MUST NOT silently re-render as parallax.
         accepted_clip, chosen_cand = _find_accepted_clip_candidate(run_dir, clip_candidates, pid)
         cand_route = str((chosen_cand or {}).get("route") or route).lower()
         if accepted_clip is not None:
-            decoded = decode_video_frames(accepted_clip, target_res=target_res)
-            if decoded and abs(len(decoded) - expected_frames) <= 2:
-                frames = decoded
+            actual_frames = count_video_frames(accepted_clip)
+            if actual_frames > 0 and abs(actual_frames - expected_frames) <= 2:
+                clip_path = accepted_clip
+                frame_count = actual_frames
+                subtitle_burned = False
             elif cand_route == "i2v" and (chosen_cand or {}).get("accepted"):
                 raise ValueError(
-                    f"I2V clip frame mismatch for {pid}: decoded {len(decoded)} frames, "
+                    f"I2V clip frame mismatch for {pid}: decoded {actual_frames} frames, "
                     f"expected {expected_frames} (E7)"
                 )
         elif cand_route == "i2v" and (chosen_cand or {}).get("accepted"):
             raise ValueError(f"Accepted I2V clip file missing for {pid}: {chosen_cand} (E7)")
 
-        # 2. Fallback to rendering only if accepted clip is missing or duration changed after CP2
-        if not frames:
+        # 2. Fallback to rendering only if accepted clip is missing or duration changed after CP2.
+        #    Flushes rendered frames immediately to disk so at most 1 panel is ever held in RAM.
+        if clip_path is None:
             if not source_img_path.is_file():
                 continue
             motion_type, _, _ = CAMERA_MOTION_TAXONOMY.get(
                 shot, ("zoom_in" if idx % 2 == 0 else "pan_down", "", 0.3)
             )
             if route in ("parallax", "i2v"):
-                frames = generate_parallax_frames(
+                fallback_frames = generate_parallax_frames(
                     source_img_path,
                     target_res=target_res,
                     duration_s=duration_s,
                     fps=fps,
                 )
             else:
-                frames = generate_kenburns_frames(
+                fallback_frames = generate_kenburns_frames(
                     source_img_path,
                     target_res=target_res,
                     duration_s=duration_s,
@@ -322,14 +332,27 @@ def assemble_from_run_state(
                     motion_type=motion_type,
                 )
 
-        if dialogue:
-            frames = burn_subtitle_on_frames(frames, dialogue, in_place=True)
+            if dialogue:
+                fallback_frames = burn_subtitle_on_frames(fallback_frames, dialogue, in_place=True)
+                subtitle_burned = True
 
-        clip_dur_s = len(frames) / float(max(1, fps))
-        clips.append(frames)
-        panel_meta.append((p, source_img_path, clip_dur_s))
+            frame_count = len(fallback_frames)
+            clip_path = run_dir / "clips" / f"{pid}_assembled.avi"
+            encode_mjpeg_avi(fallback_frames, clip_path, fps=fps)
+            del fallback_frames
 
-    if not clips:
+        clip_dur_s = frame_count / float(max(1, fps))
+        panel_clip_specs.append(
+            {
+                "clip_path": clip_path,
+                "dialogue": dialogue,
+                "subtitle_burned": subtitle_burned,
+                "frames": frame_count,
+            }
+        )
+        panel_meta.append((p, source_img_path, clip_dur_s, frame_count))
+
+    if not panel_clip_specs:
         raise ValueError("No valid panel clips found to assemble timeline")
 
     # Compute exact overlap-aware timeline & SRT cues & anchored audio events (P1-04 / P1-05)
@@ -338,9 +361,9 @@ def assemble_from_run_state(
     audio_events: List[Tuple[float, Path]] = []
     srt_idx = 1
     current_sec = 0.0
-    num_clips = len(clips)
+    num_clips = len(panel_clip_specs)
 
-    for idx, ((p, source_img_path, clip_dur_s), frames) in enumerate(zip(panel_meta, clips)):
+    for idx, (p, source_img_path, clip_dur_s, frame_count) in enumerate(panel_meta):
         pid = p.get("panel_id", f"panel_{idx + 1:03d}")
         route = p.get("route", "kenburns")
         shot = p.get("shot", "medium")
@@ -397,7 +420,7 @@ def assemble_from_run_state(
                 "shot": shot,
                 "start_s": round(current_sec, 3),
                 "duration_s": round(clip_dur_s, 3),
-                "frames": len(frames),
+                "frames": frame_count,
             }
         )
         current_sec += effective_window_s
@@ -410,11 +433,12 @@ def assemble_from_run_state(
 
     audio_file_paths = [Path(t["audio_path"]) for t in audio_tracks if t.get("audio_path")]
 
-    # Write deliverables directly to output/final_anime.* (P1-06: no duplicate 21MB file copy)
-    base_res = assemble_timeline(
-        clips=clips,
+    # Stream panel clips into output/final_anime.* with bounded memory (feat-006 / P1-01 & P1-02)
+    base_res = assemble_clips_streaming(
+        panel_clip_specs=panel_clip_specs,
         output_base_path=out_dir / "final_anime",
         fps=fps,
+        target_res=target_res,
         transition_frames=transition_frames,
         audio_paths=audio_file_paths,
         audio_events=audio_events,

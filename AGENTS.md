@@ -59,7 +59,7 @@ A feature is done only when ALL of the following are true:
 
 - [ ] Target behavior is implemented with zero placeholder stubs or fabricated metrics
 - [ ] Go ↔ Python `RunState` and config schemas remain 100% compatible (if touched)
-- [ ] Required verification actually ran (`./init.sh` passes `./harnesses/guards.sh`, Go vet, Go build, Go tests, Python compile, and all 45 pytest tests; plus `./harnesses/eval-bakeoff/probe-models.sh` for live GPU features)
+- [ ] Required verification actually ran (`./init.sh` passes `./harnesses/guards.sh`, Go vet, Go build, Go tests, Python compile, and all 47 pytest tests; plus `./harnesses/eval-bakeoff/probe-models.sh` for live GPU features)
 - [ ] Verification Evidence (exact command and output summary) is recorded in `feature_list.json` and `progress.md`
 - [ ] Repository remains clean and restartable from the standard startup path
 

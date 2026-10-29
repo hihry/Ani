@@ -42,8 +42,8 @@
       "description": "Eliminate the duplicate Python PipelineGraph orchestrator in src/m2a/graph.py and src/m2a/nodes/generate.py (which silently falls back i2v -> parallax without calling ComfyUI), and update api/app.py, api/worker.py, and ui/streamlit_app.py to spawn the compiled Go m2a binary (run/resume/inspect) and read runs/<id>/state.json directly.",
       "dependencies": ["feat-003"],
       "harness": "harnesses/api-ui",
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "./harnesses/api-ui/init.sh (PASS: 8 passed, 39 deselected in pytest -m api_ui); ./init.sh (PASS: 47 passed in 46.35s); cmd/m2a/main.go (--run-dir + config.snapshot.yaml support), src/m2a/graph.py (run_go_engine/resume_go_engine/inspect_go_engine/save_checkpoint_edits), src/m2a/nodes/generate.py (removed silent i2v->parallax fallback), api/app.py, api/worker.py, ui/streamlit_app.py, src/m2a/cli.py"
     },
     {
       "id": "feat-006",
@@ -51,8 +51,8 @@
       "description": "Refactor assemble_from_run_state in workers/pipeline_cli.py and workers/assembler.py so subtitle burn-in and crossfade assembly stream clips via FFmpeg filters rather than decoding all panel frames into an in-memory clips: List[List[Image.Image]] list (~2.83 GB peak RSS on 20-panel runs).",
       "dependencies": ["feat-003"],
       "harness": "harnesses/python-worker",
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "./harnesses/python-worker/init.sh (PASS: 42 passed, 5 deselected in pytest -m worker); ./init.sh (PASS: 47 passed in 46.35s); workers/assembler.py (StreamingMjpegAviWriter, count_video_frames, iter_video_frames, create_subtitle_overlay, _encode_mp4_via_ffmpeg_filtergraph, assemble_clips_streaming) & workers/pipeline_cli.py (assemble_from_run_state header frame-count validation + streaming assembly)"
     },
     {
       "id": "feat-007",
@@ -87,8 +87,8 @@
       "description": "Mark panels with needs_review=true in RunState when terminal kenburns fallback still fails QC thresholds in internal/pipeline/nodes.go (optim.md P0-02), and wire real GPU weight lifecycle management into ModelResidencyManager (workers/server.py) and non-ComfyUI providers when weights are installed.",
       "dependencies": ["feat-003"],
       "harness": "harnesses/go-control-plane",
-      "status": "not-started",
-      "evidence": ""
+      "status": "done",
+      "evidence": "./harnesses/go-control-plane/init.sh (PASS: go vet + go test ./... + go build + 10 passed in pytest -m contract); ./init.sh (PASS: 47 passed in 46.35s); internal/model/panel.go & src/m2a/state.py (NeedsReview / needs_review lockstep), internal/pipeline/nodes.go & engine_test.go (QCNode terminal fallback needs_review=true + state.Errors warning), workers/server.py (ModelResidencyManager register_model/resolve_weight_path/unload lifecycle)"
     }
   ]
 }

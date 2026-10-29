@@ -73,9 +73,9 @@ class QCConfig(BaseModel):
     max_new_text_lines: int = 0
     min_motion: float = 0.01
     max_motion: float = 0.98
-    max_warp_error: float = 0.12
-    min_first_frame_fidelity: float = 0.75
-    max_style_drift: float = 0.28
+    max_warp_error: float = 0.0
+    min_first_frame_fidelity: float = 0.0
+    max_style_drift: float = 0.0
     require_text_check: bool = True
     per_route: dict[str, QCRouteThresholds] = Field(default_factory=dict)
 

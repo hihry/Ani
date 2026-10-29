@@ -313,6 +313,15 @@ func TestQC_NoDuplicateKenBurnsReRender(t *testing.T) {
 	if cands[0].QC.OverallPass {
 		t.Errorf("expected OverallPass to remain false on sub-threshold candidate")
 	}
+	if !cands[0].Accepted {
+		t.Errorf("expected terminal fallback best candidate to be accepted for assembly")
+	}
+	if !state.Panels[0].NeedsReview {
+		t.Errorf("expected state.Panels[0].NeedsReview to be set true on terminal fallback QC failure")
+	}
+	if len(state.Errors) == 0 {
+		t.Errorf("expected state.Errors to record terminal fallback QC warning")
+	}
 }
 
 // TestCheckpoint1HumanEditSyncOnResume verifies Phase 2 CP1: human edits to understanding/<panel_id>.json are loaded into state on Resume.

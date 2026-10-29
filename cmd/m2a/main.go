@@ -91,6 +91,7 @@ func runPipeline(args []string, logger *slog.Logger) error {
 	langFlag := fs.String("lang", "ko", "Source language (ko, ja, en)")
 	configFlag := fs.String("config", "./configs", "Directory containing pipeline configuration files")
 	outputFlag := fs.String("output", "./runs", "Directory where run artifacts are stored")
+	runDirFlag := fs.String("run-dir", "", "Optional explicit run directory path")
 	runIDFlag := fs.String("run-id", "", "Optional explicit run ID (UUID)")
 	idAliasFlag := fs.String("id", "", "Alias for --run-id")
 	autoApproveFlag := fs.Bool("auto-approve", false, "Automatically approve human review checkpoints CP1 and CP2")
@@ -129,24 +130,36 @@ func runPipeline(args []string, logger *slog.Logger) error {
 		return errors.New("--pages flag must contain at least one page file path")
 	}
 
-	defaultConfigPath := filepath.Join(*configFlag, "default.yaml")
-	tierConfigPath := filepath.Join(*configFlag, "tiers", *tierFlag+".yaml")
-	cfg, err := config.Load(defaultConfigPath, tierConfigPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
-
 	state := model.NewRunState(pages, *langFlag, *tierFlag)
 	if *runIDFlag != "" {
 		state.Config.RunID = *runIDFlag
 	}
+
+	runDir := *runDirFlag
+	if runDir == "" {
+		runDir = filepath.Join(*outputFlag, state.Config.RunID)
+	}
+	if absRunDir, err := filepath.Abs(runDir); err == nil {
+		runDir = absRunDir
+	}
+
+	var cfg *config.PipelineConfig
+	var err error
+	snapPath := filepath.Join(runDir, "config.snapshot.yaml")
+	if _, statErr := os.Stat(snapPath); statErr == nil {
+		cfg, err = config.Load(snapPath, "")
+	} else {
+		defaultConfigPath := filepath.Join(*configFlag, "default.yaml")
+		tierConfigPath := filepath.Join(*configFlag, "tiers", *tierFlag+".yaml")
+		cfg, err = config.Load(defaultConfigPath, tierConfigPath)
+	}
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
 	state.Config.ConfigHash = model.ComputeConfigHash(pages, *langFlag, *tierFlag, cfg)
 	if cfg.Composition.Resolution[0] > 0 && cfg.Composition.Resolution[1] > 0 {
 		state.Config.OutputResolution = cfg.Composition.Resolution
-	}
-	runDir := filepath.Join(*outputFlag, state.Config.RunID)
-	if absRunDir, err := filepath.Abs(runDir); err == nil {
-		runDir = absRunDir
 	}
 	cfg.General.RunDir = runDir
 

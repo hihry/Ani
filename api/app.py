@@ -1,20 +1,31 @@
-"""FastAPI application for pipeline job management and human checkpoint editing."""
+"""FastAPI application for pipeline job management and human checkpoint editing.
+
+Delegates pipeline orchestration (`run`, `resume`, `inspect`) to the canonical Go `m2a`
+engine binary and reads/updates `runs/<job_id>/state.json` atomically (`optim.md` A1 & P0-07).
+"""
 from __future__ import annotations
 
 import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from m2a.config import load_config
-from m2a.graph import PipelineGraph
+from m2a.graph import (
+    inspect_go_engine,
+    resume_go_engine,
+    run_go_engine,
+    save_checkpoint_edits,
+    write_config_snapshot,
+)
 from m2a.state import PanelJSON, PipelineStage, RunConfig, RunState
 
 logger = logging.getLogger(__name__)
-app = FastAPI(title="Manhwa-to-Anime Job API", version="0.2.0")
+app = FastAPI(title="Manhwa-to-Anime Job API", version="0.3.0")
 
 RUNS_DIR = Path("./runs")
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -66,7 +77,7 @@ class CheckpointUpdateRequest(BaseModel):
 
 @app.post("/jobs", response_model=JobStatusResponse)
 def submit_job(request: JobSubmitRequest) -> JobStatusResponse:
-    """Submits and starts a pipeline job backed by runs/<job_id>/state.json."""
+    """Submits and starts a pipeline job via the canonical Go `m2a` engine."""
     tier = request.compute_tier if request.compute_tier in ("t0", "t1s", "t1", "t2") else "t1"
     lang = request.source_language if request.source_language in ("ko", "ja", "en") else "ko"
     cfg = load_config(tier=tier, overrides=request.config or None)
@@ -80,12 +91,17 @@ def submit_job(request: JobSubmitRequest) -> JobStatusResponse:
     )
     job_id = run_cfg.run_id
     run_dir = _safe_run_dir(job_id)
+    write_config_snapshot(cfg, run_dir)
     state = RunState(config=run_cfg, current_stage=PipelineStage.INGEST)
     state.save(run_dir)
 
     if request.source_pages:
-        graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=request.auto_approve)
-        state = graph.run(state)
+        state = run_go_engine(
+            state=state,
+            run_dir=run_dir,
+            config=cfg,
+            auto_approve=request.auto_approve,
+        )
 
     prog = STAGE_PROGRESS.get(state.current_stage, 0.0)
     return JobStatusResponse(
@@ -127,9 +143,24 @@ def get_job_state(job_id: str) -> Dict[str, Any]:
     return state.model_dump()
 
 
+@app.get("/jobs/{job_id}/inspect")
+def inspect_job(job_id: str) -> Dict[str, Any]:
+    """Runs `m2a inspect --run-dir` on the job directory and returns formatted inspection output."""
+    run_dir = _safe_run_dir(job_id)
+    if not (run_dir / "state.json").exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    state = RunState.load(run_dir)
+    report = inspect_go_engine(run_dir)
+    return {
+        "job_id": job_id,
+        "current_stage": state.current_stage.value,
+        "report": report,
+    }
+
+
 @app.put("/jobs/{job_id}/checkpoint", response_model=JobStatusResponse)
 def update_checkpoint(job_id: str, req: CheckpointUpdateRequest) -> JobStatusResponse:
-    """Saves human edits at CP1 or CP2 and optionally resumes the pipeline."""
+    """Saves human edits at CP1 or CP2 and optionally resumes the pipeline via `m2a resume`."""
     run_dir = _safe_run_dir(job_id)
     if not (run_dir / "state.json").exists():
         raise HTTPException(status_code=404, detail="Job not found")
@@ -142,12 +173,15 @@ def update_checkpoint(job_id: str, req: CheckpointUpdateRequest) -> JobStatusRes
         )
 
     state.panels = req.panels
-    state.save(run_dir)
+    save_checkpoint_edits(state, run_dir)
 
     if req.resume_after_save:
         cfg = load_config(tier=state.config.compute_tier)
-        graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=False)
-        state = graph.resume(state)
+        state = resume_go_engine(
+            run_dir=run_dir,
+            config=cfg,
+            auto_approve=False,
+        )
 
     prog = STAGE_PROGRESS.get(state.current_stage, 0.0)
     return JobStatusResponse(
