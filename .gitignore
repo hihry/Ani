@@ -1,6 +1,6 @@
 # === Go ===
-m2a
-m2a.exe
+/m2a
+/m2a.exe
 *.exe
 *.test
 *.out

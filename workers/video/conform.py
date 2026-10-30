@@ -153,22 +153,31 @@ def _resample_frames_exact(
         else:
             resampled.append(Image.blend(raw_frames[i0], raw_frames[i1], float(alpha)))
 
-    # If duration_s > native_dur_s * 1.25, fill remaining tail with gentle damped drift on last frame
+    # If duration_s > native_dur_s * 1.25, fill remaining tail with sub-pixel continuous drift
+    # starting smoothly at zoom=1.0 centered (zero jump discontinuity, zero integer-crop frozen frames)
     tail_needed = expected_frames - len(resampled)
     if tail_needed > 0:
         anchor = resampled[-1].copy()
         w, h = anchor.size
-        overscan = anchor.resize((int(round(w * 1.04)), int(round(h * 1.04))), Image.Resampling.BICUBIC)
-        ow, oh = overscan.size
-        max_dx = max(1, ow - w)
-        max_dy = max(1, oh - h)
+        max_zoom = 1.0 + min(0.22, 0.0028 * tail_needed)
+        max_pan_x = w * min(0.06, 0.0008 * tail_needed)
+        max_pan_y = h * min(0.045, 0.0006 * tail_needed)
         for t_idx in range(tail_needed):
-            # Smooth ease-out drift across the tail
             u = (t_idx + 1) / float(tail_needed)
-            eased = 1.0 - (1.0 - u) ** 2
-            x0 = int(round(0.5 * max_dx * eased))
-            y0 = int(round(0.5 * max_dy * eased))
-            drifted = overscan.crop((x0, y0, x0 + w, y0 + h))
+            eased = 0.85 * u + 0.15 * (1.0 - (1.0 - u) ** 2)
+            zoom = 1.0 + (max_zoom - 1.0) * eased
+            crop_w = w / zoom
+            crop_h = h / zoom
+            cx = (w * 0.5) + max_pan_x * eased
+            cy = (h * 0.5) - max_pan_y * eased
+            x1 = max(0.0, min(float(w) - crop_w, cx - crop_w * 0.5))
+            y1 = max(0.0, min(float(h) - crop_h, cy - crop_h * 0.5))
+            drifted = anchor.transform(
+                (w, h),
+                Image.Transform.EXTENT,
+                (x1, y1, x1 + crop_w, y1 + crop_h),
+                Image.Resampling.BILINEAR,
+            )
             resampled.append(drifted)
 
     return resampled[:expected_frames]

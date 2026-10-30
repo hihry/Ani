@@ -35,45 +35,26 @@ def generate(state: RunState, config: PipelineConfig) -> RunState:
         seed = compute_deterministic_seed(state.config.run_id, panel.panel_id, 1)
         model_id = primary_model if panel.route == "i2v" else panel.route
         prompt = panel.action_prompt or panel.motion_prompt or panel.action
-        t0 = time.time()
-        try:
-            rendered = render_single_panel_clip(
-                image_path=src_img,
-                output_path=clip_path,
-                route=panel.route,
-                shot_type=panel.shot,
-                duration_s=panel.duration_s,
-                fps=fps,
-                target_res=(res_w, res_h),
-                panel_id=panel.panel_id,
-                model_id=model_id,
-                seed=seed,
-                action_prompt=prompt,
-                comfy_url=config.generation.comfy_url if panel.route == "i2v" else "",
+        comfy_url = (config.generation.comfy_url if panel.route == "i2v" else "").strip()
+        if panel.route == "i2v" and not comfy_url:
+            raise RuntimeError(
+                f"generate {panel.panel_id}: route 'i2v' requires the canonical Go m2a engine and an active ComfyUI endpoint"
             )
-        except Exception as err:
-            elapsed = time.time() - t0
-            if panel.route == "i2v":
-                state.cost_ledger.add_model_cost(model_id, elapsed)
-                logger.warning(f"I2V render failed for {panel.panel_id} ({err}); falling back to parallax")
-                panel.route = "parallax"
-                model_id = "parallax"
-                t0 = time.time()
-                rendered = render_single_panel_clip(
-                    image_path=src_img,
-                    output_path=clip_path,
-                    route="parallax",
-                    shot_type=panel.shot,
-                    duration_s=panel.duration_s,
-                    fps=fps,
-                    target_res=(res_w, res_h),
-                    panel_id=panel.panel_id,
-                    model_id="parallax",
-                    seed=seed,
-                    action_prompt=prompt,
-                )
-            else:
-                raise
+        t0 = time.time()
+        rendered = render_single_panel_clip(
+            image_path=src_img,
+            output_path=clip_path,
+            route=panel.route,
+            shot_type=panel.shot,
+            duration_s=panel.duration_s,
+            fps=fps,
+            target_res=(res_w, res_h),
+            panel_id=panel.panel_id,
+            model_id=model_id,
+            seed=seed,
+            action_prompt=prompt,
+            comfy_url=comfy_url,
+        )
 
         route_used = rendered.get("route_used", panel.route)
         if route_used in ("i2v", "parallax", "kenburns"):

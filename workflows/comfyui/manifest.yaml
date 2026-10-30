@@ -103,6 +103,7 @@ models:
 
   hunyuan15-fp8:
     tier: "t1"
+    enabled: false
     min_vram_gb: 16
     workflow: "hunyuan15_i2v_api.json"
     files:

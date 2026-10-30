@@ -1,4 +1,8 @@
-"""Python CLI for Manhwa-to-Anime (M2A) Pipeline."""
+"""Python CLI for Manhwa-to-Anime (M2A) Pipeline.
+
+Delegates `run`, `resume`, and `inspect` commands to the canonical Go `m2a` engine
+binary (`cmd/m2a`).
+"""
 from __future__ import annotations
 
 import hashlib
@@ -8,7 +12,7 @@ from rich.console import Console
 
 from m2a.config import load_config
 from m2a.eval.bakeoff import BakeoffConfig, run_bakeoff
-from m2a.graph import PipelineGraph
+from m2a.graph import inspect_go_engine, resume_go_engine, run_go_engine
 from m2a.state import PipelineStage, RunConfig, RunState
 
 app = typer.Typer(help="Manhwa to Anime (M2A) Pipeline CLI")
@@ -18,12 +22,12 @@ console = Console()
 @app.command()
 def run(
     pages: list[Path] = typer.Argument(..., help="Source page images to process"),
-    tier: str = typer.Option("t1", "--tier", help="Compute tier configuration (t0, t1, t2)"),
+    tier: str = typer.Option("t1", "--tier", help="Compute tier configuration (t0, t1s, t1, t2)"),
     lang: str = typer.Option("ko", "--lang", help="Source language (ko, ja, en)"),
-    auto_approve: bool = typer.Option(True, "--auto-approve/--pause-checkpoints", help="Auto-approve CP1 and CP2"),
+    auto_approve: bool = typer.Option(False, "--auto-approve/--pause-checkpoints", help="Auto-approve CP1 and CP2"),
     output_dir: Path = typer.Option(Path("./runs"), "--output-dir", help="Directory to save the run"),
 ) -> None:
-    """Run the full pipeline on a set of source pages."""
+    """Run the full pipeline on a set of source pages via the canonical Go `m2a` engine."""
     console.print("[bold green]Starting M2A Pipeline run...[/bold green]")
 
     config = load_config(tier=tier)
@@ -43,9 +47,12 @@ def run(
 
     run_folder = output_dir / run_config.run_id
     state = RunState(config=run_config, current_stage=PipelineStage.INGEST)
-
-    graph = PipelineGraph(config=config, run_dir=run_folder, auto_approve_checkpoints=auto_approve)
-    final_state = graph.run(state)
+    final_state = run_go_engine(
+        state=state,
+        run_dir=run_folder,
+        config=config,
+        auto_approve=auto_approve,
+    )
 
     if final_state.current_stage == PipelineStage.DONE:
         console.print(f"[bold green]Pipeline completed successfully in {run_folder}![/bold green]")
@@ -60,14 +67,16 @@ def resume(
     run_dir: Path = typer.Argument(..., help="Run directory containing state.json to resume"),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve remaining checkpoints"),
 ) -> None:
-    """Resume a failed or paused pipeline run."""
+    """Resume a failed or paused pipeline run via the canonical Go `m2a` engine."""
     console.print(f"Resuming run from {run_dir}...")
     try:
         state = RunState.load(run_dir)
         config = load_config(tier=state.config.compute_tier)
-        graph = PipelineGraph(config=config, run_dir=run_dir, auto_approve_checkpoints=auto_approve)
-
-        final_state = graph.resume(state)
+        final_state = resume_go_engine(
+            run_dir=run_dir,
+            config=config,
+            auto_approve=auto_approve,
+        )
         if final_state.current_stage == PipelineStage.DONE:
             console.print("[bold green]Pipeline resumed and completed successfully![/bold green]")
         else:
@@ -80,19 +89,10 @@ def resume(
 def inspect(
     run_dir: Path = typer.Argument(..., help="Run directory to inspect"),
 ) -> None:
-    """Show the current state of a pipeline run."""
+    """Show the current state of a pipeline run via `m2a inspect`."""
     try:
-        state = RunState.load(run_dir)
-        console.print(f"Run ID: [cyan]{state.config.run_id}[/cyan]")
-        console.print(f"Current Stage: [magenta]{state.current_stage.value}[/magenta]")
-        console.print(f"Compute Tier: [green]{state.config.compute_tier}[/green]")
-        console.print(f"Panels Processed: {len(state.panels)}")
-        console.print(f"Clean Plates: {len(state.clean_plate_paths)}")
-        console.print(f"Audio Tracks: {len(state.audio_tracks)}")
-        if state.errors:
-            console.print("[red]Errors:[/red]")
-            for err in state.errors:
-                console.print(f" - {err}")
+        report = inspect_go_engine(run_dir)
+        console.print(report)
     except Exception as e:
         console.print(f"[bold red]Failed to inspect run: {e}[/bold red]")
 

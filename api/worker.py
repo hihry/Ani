@@ -1,4 +1,8 @@
-"""Worker process for processing pipeline jobs from run directories with atomic lock claiming."""
+"""Worker process for processing pipeline jobs from run directories with atomic lock claiming.
+
+Delegates pipeline execution (`run` / `resume`) to the canonical Go `m2a` engine binary
+and reads `runs/<id>/state.json` directly (`optim.md` A1 & P0-07).
+"""
 from __future__ import annotations
 
 import logging
@@ -8,7 +12,7 @@ import time
 from pathlib import Path
 
 from m2a.config import load_config
-from m2a.graph import PipelineGraph
+from m2a.graph import resume_go_engine, run_go_engine
 from m2a.state import PipelineStage, RunState
 
 logger = logging.getLogger(__name__)
@@ -45,13 +49,21 @@ class Worker:
         self.running = False
 
     def process_run(self, run_dir: Path, auto_approve: bool = False) -> RunState:
-        """Processes a single run directory using PipelineGraph."""
+        """Processes a single run directory using the canonical Go `m2a` engine."""
         state = RunState.load(run_dir)
         cfg = load_config(tier=state.config.compute_tier)
-        graph = PipelineGraph(config=cfg, run_dir=run_dir, auto_approve_checkpoints=auto_approve)
         if state.current_stage == PipelineStage.INGEST and not state.panels:
-            return graph.run(state)
-        return graph.resume(state)
+            return run_go_engine(
+                state=state,
+                run_dir=run_dir,
+                config=cfg,
+                auto_approve=auto_approve,
+            )
+        return resume_go_engine(
+            run_dir=run_dir,
+            config=cfg,
+            auto_approve=auto_approve,
+        )
 
     def run(self) -> None:
         signal.signal(signal.SIGINT, self._handle_shutdown)

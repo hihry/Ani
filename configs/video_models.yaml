@@ -2,19 +2,22 @@ models:
   wan22-5b-gguf-q4:
     workflow: workflows/comfyui/wan22_ti2v5b_gguf_api.json
     family: wan22
-    min_vram_gb: 8
+    min_vram_gb: 6
     native_fps: 16
     frame_step: 4
     frame_offset: 1
-    max_frames: 49
+    max_frames: 25
     resolution_buckets:
-      - [480, 832]
+      - [512, 384]
+      - [448, 448]
+      - [384, 512]
+      - [320, 576]
     steps: 12
-    cfg: 5.0
-    sampler: uni_pc
+    cfg: 3.5
+    sampler: euler
     scheduler: simple
-    required_nodes: [UnetLoaderGGUF, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
-    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+    required_nodes: [UnetLoaderGGUF, CLIPLoader, VAELoader, Wan22ImageToVideoLatent, ModelSamplingSD3, KSampler, SaveWEBM]
+    negative_prompt: "色调艳丽, 过曝, overexposed, oversaturated, neon flash, high contrast, text, speech bubble, watermark, subtitles, deformed face, distorted mouth, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
 
   wan22-5b-fp8:
     workflow: workflows/comfyui/wan22_ti2v5b_fp8_api.json
@@ -25,14 +28,16 @@ models:
     frame_offset: 1
     max_frames: 81
     resolution_buckets:
+      - [640, 480]
+      - [512, 512]
       - [480, 832]
       - [544, 960]
     steps: 20
     cfg: 5.0
     sampler: uni_pc
     scheduler: simple
-    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
-    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, Wan22ImageToVideoLatent, ModelSamplingSD3, KSampler, SaveWEBM]
+    negative_prompt: "色调艳丽, 过曝, overexposed, oversaturated, neon flash, high contrast, text, speech bubble, watermark, subtitles, deformed face, distorted mouth, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
 
   wan22-ti2v-5b:
     workflow: workflows/comfyui/wan22_ti2v5b_fp8_api.json
@@ -43,14 +48,16 @@ models:
     frame_offset: 1
     max_frames: 81
     resolution_buckets:
+      - [640, 480]
+      - [512, 512]
       - [480, 832]
       - [544, 960]
     steps: 20
     cfg: 5.0
     sampler: uni_pc
     scheduler: simple
-    required_nodes: [UNETLoader, CLIPLoader, VAELoader, WanImageToVideo, KSampler, SaveWEBM]
-    negative_prompt: "text, speech bubble, watermark, subtitles, deformed face, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
+    required_nodes: [UNETLoader, CLIPLoader, VAELoader, Wan22ImageToVideoLatent, ModelSamplingSD3, KSampler, SaveWEBM]
+    negative_prompt: "色调艳丽, 过曝, overexposed, oversaturated, neon flash, high contrast, text, speech bubble, watermark, subtitles, deformed face, distorted mouth, extra limbs, 3d render, photorealistic, blurry, low quality, flicker"
 
   wan22-a14b-fp8:
     workflow: workflows/comfyui/wan22_i2v_a14b_api.json

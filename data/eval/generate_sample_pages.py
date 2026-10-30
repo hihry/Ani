@@ -267,9 +267,10 @@ def generate_all():
     }
     
     gt_path = OUTPUT_DIR / "ground_truth.json"
-    with open(gt_path, "w", encoding="utf-8") as f:
-        json.dump(ground_truth, f, indent=2)
-    print(f"Generated {gt_path} with {len(all_panels_for_gt)} total panels.")
+    if not gt_path.exists():
+        with open(gt_path, "w", encoding="utf-8") as f:
+            json.dump(ground_truth, f, indent=2)
+        print(f"Generated {gt_path} with {len(all_panels_for_gt)} total panels.")
 
 if __name__ == "__main__":
     generate_all()
