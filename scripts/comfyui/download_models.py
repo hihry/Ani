@@ -31,6 +31,8 @@ def select_models(manifest: Dict[str, Any], tier: str | None, model_id: str | No
             continue
         if tier and spec.get("tier") != tier:
             continue
+        if not model_id and spec.get("enabled") is False:
+            continue
         selected.append((mid, spec))
     return selected
 
@@ -47,6 +49,19 @@ def resolve_models_root(comfy_dir: Path) -> Path:
         except Exception:
             pass
     return comfy_dir / "models"
+
+
+def resolve_hf_cache_dir(models_root: Path) -> Path:
+    """Resolve HuggingFace cache directory on local disk rather than inside a cloud FUSE mount."""
+    env_cache = os.environ.get("HF_HUB_CACHE")
+    if env_cache:
+        return Path(env_cache)
+    os_part = Path("/run/media/hihry/OS")
+    if os_part.is_dir() and os.access(os_part, os.W_OK):
+        return os_part / ".cache" / "huggingface"
+    if "google_ai_cloud" in str(models_root.resolve()):
+        return Path.home() / ".cache" / "huggingface"
+    return models_root / ".hf_cache"
 
 
 def download_manifest_models(
@@ -90,34 +105,41 @@ def download_manifest_models(
     except ImportError as exc:
         raise RuntimeError("huggingface_hub is required for live weight downloads; use --dry-run to verify manifest") from exc
 
-    # Place HuggingFace cache on the same high-capacity volume as models_root so /home never fills up
-    hf_cache_dir = models_root / ".hf_cache"
+    # Place HuggingFace cache on local high-capacity storage (not inside a cloud FUSE mount)
+    hf_cache_dir = resolve_hf_cache_dir(models_root)
     hf_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("HF_HUB_CACHE", str(hf_cache_dir))
+    is_cloud_mount = "google_ai_cloud" in str(models_root.resolve())
 
     for item in plan:
         dest_path = Path(item["dest"])
         expected_sha = item.get("sha256")
-        if dest_path.is_file() and expected_sha and compute_sha256(dest_path) == expected_sha:
-            print(f"[{item['model_id']}] Already verified: {dest_path}")
-            continue
+        if dest_path.is_file() and expected_sha:
+            if is_cloud_mount and dest_path.stat().st_size > 0:
+                print(f"[{item['model_id']}] Already present on cloud mount: {dest_path}")
+                continue
+            if compute_sha256(dest_path) == expected_sha:
+                print(f"[{item['model_id']}] Already verified: {dest_path}")
+                continue
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+        local_download_dir = (hf_cache_dir / "staging" / item["model_id"]) if is_cloud_mount else dest_path.parent
+        local_download_dir.mkdir(parents=True, exist_ok=True)
         print(f"[{item['model_id']}] Downloading {item['repo']} :: {item['file']} -> {dest_path} ...")
         downloaded = Path(
             hf_hub_download(
                 repo_id=item["repo"],
                 filename=item["file"],
                 revision=item["revision"],
-                local_dir=str(dest_path.parent),
+                local_dir=str(local_download_dir),
                 cache_dir=str(hf_cache_dir),
             )
         )
+        if expected_sha:
+            actual_sha = compute_sha256(downloaded)
+            if actual_sha != expected_sha:
+                raise ValueError(f"SHA256 mismatch for {downloaded}: got {actual_sha}, expected {expected_sha}")
         if downloaded != dest_path and downloaded.exists():
             shutil.move(str(downloaded), str(dest_path))
-        if expected_sha:
-            actual_sha = compute_sha256(dest_path)
-            if actual_sha != expected_sha:
-                raise ValueError(f"SHA256 mismatch for {dest_path}: got {actual_sha}, expected {expected_sha}")
     return plan
 
 

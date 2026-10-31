@@ -77,6 +77,7 @@ class PanelJSON(BaseModel):
     motion_intensity: float = Field(ge=0.0, le=1.0, default=0.3)
     route: Literal["i2v", "parallax", "kenburns"] = "kenburns"
     duration_s: float = Field(ge=0.5, le=10.0, default=4.0)
+    needs_review: bool = False
 
 
 class VoiceProfile(BaseModel):

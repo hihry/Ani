@@ -6,12 +6,14 @@ rendering without paying model cold-start overhead on every stage.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import gc
 import logging
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 from PIL import Image
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -44,45 +46,165 @@ logger = logging.getLogger("m2a.worker")
 
 
 class ModelResidencyManager:
-    """Enforces single-heavy-model residency on GPU to prevent VRAM OOM."""
+    """Enforces single-heavy-model residency on GPU to prevent VRAM OOM.
 
-    def __init__(self) -> None:
+    Manages real local and ComfyUI provider weight lifecycles on `/run/media/hihry/OS/m2a_models`
+    (or `M2A_MODELS_DIR`), executing registered loader/unloader callbacks, releasing object
+    references, running garbage collection, and flushing CUDA/ComfyUI VRAM caches whenever
+    the active heavy model changes (`feat-010`).
+    """
+
+    def __init__(self, models_dir: Optional[Path] = None) -> None:
         self._lock = threading.RLock()
         self.resident_model: Optional[str] = None
         self.light_models: set[str] = {"opencv-slicer", "lama-telea"}
         self.last_comfy_url: str = os.environ.get("M2A_COMFY_URL", "")
+        self.models_dir: Path = Path(
+            models_dir or os.environ.get("M2A_MODELS_DIR", "/run/media/hihry/OS/m2a_models")
+        )
+        self._loaded_instances: Dict[str, Any] = {}
+        self._loaders: Dict[str, Callable[[], Any]] = {}
+        self._unloaders: Dict[str, Callable[[Any], None]] = {}
+        self._weight_paths: Dict[str, Path] = {}
+        self.transition_history: List[Dict[str, Any]] = []
 
-    def activate(self, model_name: str, comfy_url: str = "") -> None:
+    def register_model(
+        self,
+        model_name: str,
+        loader: Optional[Callable[[], Any]] = None,
+        unloader: Optional[Callable[[Any], None]] = None,
+        weight_path: Optional[Path] = None,
+    ) -> None:
+        """Registers a lifecycle loader/unloader and optional on-disk weight path for a heavy model."""
+        with self._lock:
+            if loader is not None:
+                self._loaders[model_name] = loader
+            if unloader is not None:
+                self._unloaders[model_name] = unloader
+            if weight_path is not None:
+                self._weight_paths[model_name] = Path(weight_path)
+
+    def resolve_weight_path(self, model_name: str) -> Optional[Path]:
+        """Resolves the local model weight path under models_dir or configs/models.yaml."""
+        with self._lock:
+            if model_name in self._weight_paths:
+                return self._weight_paths[model_name]
+        model_id = model_name.split(":", 1)[1] if ":" in model_name else model_name
+        try:
+            specs = load_model_specs()
+            if model_id in specs and specs[model_id].weights:
+                first_weight = next(iter(specs[model_id].weights.values()))
+                rel_p = getattr(first_weight, "path", "") or (
+                    first_weight.get("path", "") if isinstance(first_weight, dict) else ""
+                )
+                if rel_p:
+                    candidate = Path(rel_p)
+                    if not candidate.is_absolute():
+                        candidate = self.models_dir / candidate
+                    return candidate
+        except Exception:
+            pass
+        candidate_dir = self.models_dir / model_id
+        return candidate_dir if candidate_dir.exists() else None
+
+    def get_resident_instance(self, model_name: Optional[str] = None) -> Any:
+        """Returns the active resident model handle/context if loaded."""
+        with self._lock:
+            target = model_name or self.resident_model
+            if not target:
+                return None
+            return self._loaded_instances.get(target)
+
+    def _unload_model_locked(self, model_name: str, comfy_url: str = "") -> None:
+        logger.info(f"Unloading heavy model {model_name}")
+        instance = self._loaded_instances.pop(model_name, None)
+        unloader = self._unloaders.get(model_name)
+        if unloader is not None and instance is not None:
+            try:
+                unloader(instance)
+            except Exception as exc:
+                logger.warning(f"Custom unloader for {model_name} raised error: {exc}")
+        elif instance is not None:
+            for attr in ("unload", "close", "cpu"):
+                fn = getattr(instance, attr, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        pass
+                    break
+        del instance
+
+        eff_url = comfy_url or self.last_comfy_url
+        if model_name.startswith("comfyui") and eff_url:
+            try:
+                ComfyClient(base_url=eff_url).free_memory()
+            except Exception:
+                pass
+        gc.collect()
+        self._empty_torch_cache()
+
+    def _load_model_locked(self, model_name: str, comfy_url: str = "") -> Any:
+        if model_name in self._loaded_instances:
+            return self._loaded_instances[model_name]
+
+        loader = self._loaders.get(model_name)
+        weight_path = self.resolve_weight_path(model_name)
+        if loader is not None:
+            instance = loader()
+        else:
+            instance = {
+                "model_name": model_name,
+                "weight_path": str(weight_path.as_posix()) if weight_path else "",
+                "weight_exists": bool(weight_path and weight_path.exists()),
+                "comfy_url": comfy_url or self.last_comfy_url,
+                "loaded_at": time.time(),
+            }
+        self._loaded_instances[model_name] = instance
+        return instance
+
+    def activate(self, model_name: str, comfy_url: str = "") -> Any:
         with self._lock:
             if comfy_url:
                 self.last_comfy_url = comfy_url
-            if self.resident_model and self.resident_model != model_name:
-                logger.info(f"Unloading heavy model {self.resident_model} before loading {model_name}")
-                if self.resident_model.startswith("comfyui") and self.last_comfy_url:
-                    try:
-                        ComfyClient(base_url=self.last_comfy_url).free_memory()
-                    except Exception:
-                        pass
-                self._empty_torch_cache()
+            prev_model = self.resident_model
+            if prev_model and prev_model != model_name:
+                logger.info(f"Unloading heavy model {prev_model} before loading {model_name}")
+                self._unload_model_locked(prev_model, comfy_url=self.last_comfy_url)
+            instance = self._load_model_locked(model_name, comfy_url=self.last_comfy_url)
             self.resident_model = model_name
+            if prev_model != model_name:
+                self.transition_history.append(
+                    {
+                        "from": prev_model,
+                        "to": model_name,
+                        "timestamp": time.time(),
+                    }
+                )
+            return instance
 
     @contextmanager
-    def acquire(self, owner: str, comfy_url: str = "") -> Iterator[None]:
-        self.activate(owner, comfy_url=comfy_url)
+    def acquire(self, owner: str, comfy_url: str = "") -> Iterator[Any]:
+        instance = self.activate(owner, comfy_url=comfy_url)
         try:
-            yield
+            yield instance
         finally:
             pass
 
     def free_all(self, comfy_url: str = "") -> None:
         with self._lock:
             eff_url = comfy_url or self.last_comfy_url or os.environ.get("M2A_COMFY_URL", "")
-            if eff_url:
+            for loaded_name in list(self._loaded_instances.keys()):
+                self._unload_model_locked(loaded_name, comfy_url=eff_url)
+            if self.resident_model:
+                self._unload_model_locked(self.resident_model, comfy_url=eff_url)
+            elif eff_url:
                 try:
                     ComfyClient(base_url=eff_url).free_memory()
                 except Exception:
                     pass
-            self._empty_torch_cache()
+                gc.collect()
+                self._empty_torch_cache()
             self.resident_model = None
 
     @staticmethod
@@ -95,10 +217,11 @@ class ModelResidencyManager:
             pass
 
     def loaded_models(self) -> List[str]:
-        models = sorted(self.light_models)
-        if self.resident_model:
-            models.append(self.resident_model)
-        return models
+        with self._lock:
+            models = sorted(self.light_models)
+            if self.resident_model:
+                models.append(self.resident_model)
+            return models
 
 
 RESIDENCY = ModelResidencyManager()

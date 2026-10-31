@@ -1,11 +1,15 @@
-"""Streamlit app for Manhwa-to-Anime pipeline editing and monitoring (CP1 & CP2)."""
+"""Streamlit app for Manhwa-to-Anime pipeline editing and monitoring (CP1 & CP2).
+
+Delegates pipeline orchestration (`resume` / `inspect`) to the canonical Go `m2a`
+engine binary and reads/updates `runs/<id>/state.json` directly (`optim.md` A1 & P0-07).
+"""
 import json
 import logging
 from pathlib import Path
 import streamlit as st
 
 from m2a.config import load_config
-from m2a.graph import PipelineGraph
+from m2a.graph import inspect_go_engine, resume_go_engine, save_checkpoint_edits
 from m2a.state import PanelJSON, PipelineStage, RunState
 
 logger = logging.getLogger(__name__)
@@ -29,6 +33,12 @@ if selected_run_id:
     st.sidebar.markdown(f"**Current Stage:** `{state.current_stage.value}`")
     st.sidebar.markdown(f"**Panels:** `{len(state.panels)}`")
 
+    with st.expander("Engine Inspection Report (`m2a inspect`)", expanded=False):
+        try:
+            st.code(inspect_go_engine(run_dir), language="text")
+        except Exception as exc:
+            st.warning(f"Inspection unavailable: {exc}")
+
     st.divider()
     st.header("Checkpoint 1: Panel & Dialogue Review")
     with st.expander("View and Edit Panel JSON Contracts", expanded=(state.current_stage == PipelineStage.CHECKPOINT_1)):
@@ -43,10 +53,9 @@ if selected_run_id:
             if st.button("Save CP1 Edits & Resume"):
                 raw_list = json.loads(edited_json)
                 state.panels = [PanelJSON.model_validate(item) for item in raw_list]
-                state.save(run_dir)
+                save_checkpoint_edits(state, run_dir)
                 cfg = load_config(tier=state.config.compute_tier)
-                graph = PipelineGraph(config=cfg, run_dir=run_dir)
-                state = graph.resume(state)
+                state = resume_go_engine(run_dir=run_dir, config=cfg, auto_approve=False)
                 st.success(f"CP1 saved! Advanced to {state.current_stage.value}")
 
     st.divider()
@@ -61,8 +70,7 @@ if selected_run_id:
             )
             state.panels[idx].route = new_route  # type: ignore
         if st.button("Approve Routes & Render Video"):
-            state.save(run_dir)
+            save_checkpoint_edits(state, run_dir)
             cfg = load_config(tier=state.config.compute_tier)
-            graph = PipelineGraph(config=cfg, run_dir=run_dir)
-            state = graph.resume(state)
+            state = resume_go_engine(run_dir=run_dir, config=cfg, auto_approve=False)
             st.success(f"Routes approved! Pipeline stage: {state.current_stage.value}")

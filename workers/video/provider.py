@@ -189,7 +189,11 @@ class ComfyVideoProvider:
             from workers.assembler import decode_video_frames
             expected_frames = max(1, int(round(float(duration_s) * int(fps))))
             cached_frames = decode_video_frames(final_clip_path)
-            if not cached_frames or len(cached_frames) != expected_frames or cached_frames[0].size != (int(target_res[0]), int(target_res[1])):
+            if (
+                not cached_frames
+                or len(cached_frames) != expected_frames
+                or cached_frames[0].size != (int(target_res[0]), int(target_res[1]))
+            ):
                 conform(
                     raw_clip=final_clip_path,
                     clean_plate=clean_plate,

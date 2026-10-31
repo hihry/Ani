@@ -1,0 +1,94 @@
+{
+  "features": [
+    {
+      "id": "feat-001",
+      "name": "Phase 0 & 1: Core Foundations, 2D Slicer & CPU Motion Comic Baseline",
+      "description": "Implement unified Go/Python RunState contract, YAML config + tier overlays, 800px strip stitching, 2D row/column gutter panel slicing (F1=1.0000), P10 aspect-safe Ken Burns, and 2.5D depth parallax rendering. (Open follow-ups from optim.md tracked in feat-005, feat-006, and feat-010.)",
+      "dependencies": [],
+      "harness": "harnesses/go-control-plane",
+      "status": "done",
+      "evidence": "./harnesses/guards.sh (PASS); go test ./... (5 packages with tests / 29 Go tests PASS); python3 workers/eval_segmentation.py (F1=1.0000, Mean IoU=0.9968); python3 -m pytest tests/test_pipeline.py -q (33 passed)"
+    },
+    {
+      "id": "feat-002",
+      "name": "Phase 2: Narrative Scene Understanding, Character Bible & Clean Plates",
+      "description": "Extract structured PanelJSON (shot framing, dialogue, speaker attribution, motion prompts), build persistent CharacterBible, and inpaint speech bubbles via LaMa/Telea into clean_plates/ with CP1 human review support and zero ground-truth leakage in production workers. (Note: when heavy local weights for magiv3/qwen3-vl/lama are absent on disk, providers use deterministic OpenCV/PIL/NumPy fallback algorithms; real weight wiring tracked in feat-010.)",
+      "dependencies": ["feat-001"],
+      "harness": "harnesses/python-worker",
+      "status": "done",
+      "evidence": "Removed _load_eval_ground_truth and M2A_EVAL_ORACLE ground-truth loading from workers/understanding.py; ./harnesses/guards.sh (PASS); python3 -m pytest tests/test_pipeline.py -k 'understand or inpaint or checkpoint or test_zero_ground_truth_leakage_in_production_code' -q (PASS)"
+    },
+    {
+      "id": "feat-003",
+      "name": "Phase 3 (M0-M5): ComfyUI I2V Provider, Conform Engine, QC Metrics v2 & Real-Model Probe Infra",
+      "description": "Implement all 6 tagged ComfyUI API workflows, ComfyClient + ClipCache, aspect-bucket conform with 1.25x slow-mo and sub-pixel continuous extent tail drift, optical-flow/LPIPS/OCR QC metrics v2, resumable bake-off + ROC/Youden calibration harness, and real-model GPU probe + anti-slideshow detector (src/m2a/eval/probe_models.py & harnesses/eval-bakeoff/probe-models.sh).",
+      "dependencies": ["feat-002"],
+      "harness": "harnesses/eval-bakeoff",
+      "status": "done",
+      "evidence": "python3 -m pytest tests/test_phase3.py -q (12 passed, including 100% rejection across all 6 adversarial QC fixture types and test_probe_models_and_slideshow_detector); ./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only (PASS: 3 wan22-5b-gguf-q4 files + SHA-256 verified on /run/media/hihry/OS/m2a_models); ./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_dramatic_01 (PASS: exit 0, 3/3 valid I2V clips); ./harnesses/eval-bakeoff/probe-models.sh --check-run runs/solo_gpu_01 (FAIL-CLOSED: exit 1 catching 2/2 i2v panels degraded to kenburns/parallax)"
+    },
+    {
+      "id": "feat-004",
+      "name": "Phase 3 (M6-M7): Cloud GPU Video Bake-off Execution & Empirical QC Calibration",
+      "description": "Provision ComfyUI Python 3.12 runtime (:8188), copy t1s weights off the rclone FUSE mount, execute real GPU bake-off across >=16 representative manhwa panels on t1s (local 6GB GGUF) and t1/t2 (cloud 24-48GB GPU), pass ./harnesses/eval-bakeoff/probe-models.sh, collect 3-reviewer blind rubric scores (Krippendorff alpha >= 0.6), and commit empirically calibrated per-route QC thresholds in configs/qc/.",
+      "dependencies": ["feat-003"],
+      "harness": "harnesses/eval-bakeoff",
+      "status": "in-progress",
+      "evidence": "./harnesses/eval-bakeoff/probe-models.sh --tier t1s --files-only verified 3 t1s model files + SHA-256 on /run/media/hihry/OS/m2a_models (rclone mount); live probe (./harnesses/eval-bakeoff/probe-models.sh --tier t1s) fails closed as expected because ComfyUI :8188 is offline (/run/media/hihry/OS/venvs/ is empty) and t1/t2 weights are not downloaded; RC1 (Wan22ImageToVideoLatent+ModelSamplingSD3) and RC3 (conform.py sub-pixel tail drift: 0/120 frozen frames on runs/solo_dramatic_01/clips/_raw/*.webm) are fixed."
+    },
+    {
+      "id": "feat-005",
+      "name": "Unify Job Queue API & Streamlit UI onto Canonical Go DAG Engine (optim.md A1 & P0-07)",
+      "description": "Eliminate the duplicate Python PipelineGraph orchestrator in src/m2a/graph.py and src/m2a/nodes/generate.py (which silently falls back i2v -> parallax without calling ComfyUI), and update api/app.py, api/worker.py, and ui/streamlit_app.py to spawn the compiled Go m2a binary (run/resume/inspect) and read runs/<id>/state.json directly.",
+      "dependencies": ["feat-003"],
+      "harness": "harnesses/api-ui",
+      "status": "done",
+      "evidence": "./harnesses/api-ui/init.sh (PASS: 8 passed, 39 deselected in pytest -m api_ui); ./init.sh (PASS: 47 passed in 46.35s); cmd/m2a/main.go (--run-dir + config.snapshot.yaml support), src/m2a/graph.py (run_go_engine/resume_go_engine/inspect_go_engine/save_checkpoint_edits), src/m2a/nodes/generate.py (removed silent i2v->parallax fallback), api/app.py, api/worker.py, ui/streamlit_app.py, src/m2a/cli.py"
+    },
+    {
+      "id": "feat-006",
+      "name": "Streaming FFmpeg Assembly & Bounded Peak RSS Memory (optim.md P1-01 & P1-02)",
+      "description": "Refactor assemble_from_run_state in workers/pipeline_cli.py and workers/assembler.py so subtitle burn-in and crossfade assembly stream clips via FFmpeg filters rather than decoding all panel frames into an in-memory clips: List[List[Image.Image]] list (~2.83 GB peak RSS on 20-panel runs).",
+      "dependencies": ["feat-003"],
+      "harness": "harnesses/python-worker",
+      "status": "done",
+      "evidence": "./harnesses/python-worker/init.sh (PASS: 42 passed, 5 deselected in pytest -m worker); ./init.sh (PASS: 47 passed in 46.35s); workers/assembler.py (StreamingMjpegAviWriter, count_video_frames, iter_video_frames, create_subtitle_overlay, _encode_mp4_via_ffmpeg_filtergraph, assemble_clips_streaming) & workers/pipeline_cli.py (assemble_from_run_state header frame-count validation + streaming assembly)"
+    },
+    {
+      "id": "feat-007",
+      "name": "Phase 4: Multi-Speaker Multilingual TTS (Korean/Japanese/English) & Character Voice Locking",
+      "description": "Integrate production MeloTTS / Kokoro / Chatterbox providers with CharacterBible voice_id persistence, per-line emotion prosody control, and SFX audio bed mixing in workers/assembler.py.",
+      "dependencies": ["feat-006"],
+      "harness": "harnesses/python-worker",
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-008",
+      "name": "Phase 6 Stretch: Character Identity Conditioning (Wan 2.2 VACE / IP-Adapter / ControlNet)",
+      "description": "Add reference-image conditioning from CharacterBible crops into ComfyUI I2V workflows to boost cross-panel character identity similarity on close-up and action hero shots.",
+      "dependencies": ["feat-004"],
+      "harness": "harnesses/python-worker",
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-009",
+      "name": "Phase 6 Stretch: Multi-Chapter Batch Processing & Episode Stitching CLI",
+      "description": "Extend cmd/m2a and internal/pipeline to process multi-chapter webtoon directories with shared CharacterBible continuity, cross-chapter ClipCache reuse, and episode-level cost ledger reporting.",
+      "dependencies": ["feat-005", "feat-006"],
+      "harness": "harnesses/go-control-plane",
+      "status": "not-started",
+      "evidence": ""
+    },
+    {
+      "id": "feat-010",
+      "name": "QC Terminal Fallback Needs-Review Flag & Real Local Model Residency (optim.md P0-02 & §3)",
+      "description": "Mark panels with needs_review=true in RunState when terminal kenburns fallback still fails QC thresholds in internal/pipeline/nodes.go (optim.md P0-02), and wire real GPU weight lifecycle management into ModelResidencyManager (workers/server.py) and non-ComfyUI providers when weights are installed.",
+      "dependencies": ["feat-003"],
+      "harness": "harnesses/go-control-plane",
+      "status": "done",
+      "evidence": "./harnesses/go-control-plane/init.sh (PASS: go vet + go test ./... + go build + 10 passed in pytest -m contract); ./init.sh (PASS: 47 passed in 46.35s); internal/model/panel.go & src/m2a/state.py (NeedsReview / needs_review lockstep), internal/pipeline/nodes.go & engine_test.go (QCNode terminal fallback needs_review=true + state.Errors warning), workers/server.py (ModelResidencyManager register_model/resolve_weight_path/unload lifecycle)"
+    }
+  ]
+}

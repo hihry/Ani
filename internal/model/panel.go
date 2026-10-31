@@ -82,6 +82,7 @@ type PanelJSON struct {
 	MotionIntensity float64        `json:"motion_intensity"` // 0.0 to 1.0
 	Route           AnimationRoute `json:"route"`            // Determined by shot router
 	DurationS       float64        `json:"duration_s"`       // 0.5 to 10.0
+	NeedsReview     bool           `json:"needs_review,omitempty"`
 }
 
 // NewPanelJSON constructs a new PanelJSON with sensible pipeline defaults:

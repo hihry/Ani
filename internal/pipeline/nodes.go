@@ -1029,11 +1029,25 @@ func QCNode(ctx context.Context, state *model.RunState, cfg *config.PipelineConf
 				lastRenderErr,
 			)
 			if terminal || (nextRoute == currRoute && nextRoute == model.RouteKenBurns) {
+				p.NeedsReview = true
 				allCands := state.ClipCandidates[p.PanelID]
 				if len(allCands) > 0 {
 					bestIdx := bestCandidateIndex(allCands)
 					state.ClipCandidates[p.PanelID][bestIdx].Accepted = true
-					slog.Warn("Panel QC below threshold on final fallback lane; accepting best take for assembly",
+					if allCands[bestIdx].Route != "" {
+						p.Route = allCands[bestIdx].Route
+					}
+					state.Errors = append(
+						state.Errors,
+						fmt.Sprintf(
+							"panel %s: QC below threshold on terminal fallback lane (%s); flagged needs_review=true and accepted best take %d (identity=%.2f)",
+							p.PanelID,
+							p.Route,
+							bestIdx+1,
+							allCands[bestIdx].QC.IdentitySimilarity,
+						),
+					)
+					slog.Warn("Panel QC below threshold on final fallback lane; flagging needs_review and accepting best take for assembly",
 						"panel", p.PanelID, "lane", p.Route, "take", bestIdx+1,
 						"identity", allCands[bestIdx].QC.IdentitySimilarity)
 				}
