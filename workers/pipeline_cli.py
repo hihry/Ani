@@ -40,6 +40,7 @@ try:
         inpaint_panel_bubbles,
         synthesize_speech_wav,
     )
+    from workers.story_director import build_story_director_plan
 except ImportError:
     from ingest import stitch_vertical_pages
     from slicer import crop_and_save_panels, detect_panels_gutter, infer_shot_type
@@ -60,6 +61,7 @@ except ImportError:
         inpaint_panel_bubbles,
         synthesize_speech_wav,
     )
+    from story_director import build_story_director_plan
 
 
 def _fmt_srt_time(sec: float) -> str:
@@ -122,30 +124,45 @@ def render_single_panel_clip(
 
     resolved_comfy = (comfy_url or os.environ.get("M2A_COMFY_URL", "")).strip()
     if route == "i2v" and resolved_comfy:
-        from workers.video.comfy_client import ComfyClient
+        from workers.video.comfy_client import ComfyClient, ComfyExecutionError, ComfyNodeMissing
         from workers.video.provider import ComfyVideoProvider, load_model_specs
 
         specs = load_model_specs()
         eff_model = model_id if model_id in specs else "wan22-ti2v-5b"
-        provider = ComfyVideoProvider(
-            spec=specs[eff_model],
-            client=ComfyClient(base_url=resolved_comfy),
-        )
-        gen_res = provider.generate(
-            panel={
-                "panel_id": pid,
-                "action_prompt": action_prompt,
-                "motion_type": motion_type,
-                "emotion": emotion,
-            },
-            clean_plate=image_path,
-            duration_s=duration_s,
-            seed=seed,
-            out_dir=output_path.parent,
-            target_res=target_res,
-            fps=fps,
-            cancel_event=cancel_event,
-        )
+        client = ComfyClient(base_url=resolved_comfy)
+        panel_payload = {
+            "panel_id": pid,
+            "action_prompt": action_prompt,
+            "motion_type": motion_type,
+            "emotion": emotion,
+        }
+        try:
+            provider = ComfyVideoProvider(spec=specs[eff_model], client=client)
+            gen_res = provider.generate(
+                panel=panel_payload,
+                clean_plate=image_path,
+                duration_s=duration_s,
+                seed=seed,
+                out_dir=output_path.parent,
+                target_res=target_res,
+                fps=fps,
+                cancel_event=cancel_event,
+            )
+        except (ComfyExecutionError, ComfyNodeMissing):
+            if eff_model != "wan22-5b-gguf-q4" and "wan22-5b-gguf-q4" in specs:
+                provider = ComfyVideoProvider(spec=specs["wan22-5b-gguf-q4"], client=client)
+                gen_res = provider.generate(
+                    panel=panel_payload,
+                    clean_plate=image_path,
+                    duration_s=duration_s,
+                    seed=seed,
+                    out_dir=output_path.parent,
+                    target_res=target_res,
+                    fps=fps,
+                    cancel_event=cancel_event,
+                )
+            else:
+                raise
         if gen_res.clip_path != output_path:
             import shutil
             shutil.copy2(gen_res.clip_path, output_path)
@@ -261,6 +278,19 @@ def assemble_from_run_state(
     if not panels:
         raise ValueError("No panels present in state.json to assemble")
 
+    # Build Story Director narrative plan & 18-genre theme profile
+    cfg_dict = state.get("config") or {}
+    genre_hint = cfg_dict.get("genre_theme") or cfg_dict.get("genre_id") or None
+    story_plan_path = run_dir / "story" / "story_plan.json"
+    story_plan = build_story_director_plan(
+        panels=panels,
+        genre_hint=genre_hint,
+        run_dir=run_dir,
+        output_path=story_plan_path,
+    )
+    genre_id = story_plan["genre_id"]
+    transition_type = story_plan["theme_profile"]["transition_type"]
+
     tracks_by_panel: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for t in audio_tracks:
         if isinstance(t, dict) and t.get("panel_id"):
@@ -322,6 +352,7 @@ def assemble_from_run_state(
                     target_res=target_res,
                     duration_s=duration_s,
                     fps=fps,
+                    genre_id=genre_id,
                 )
             else:
                 fallback_frames = generate_kenburns_frames(
@@ -442,6 +473,8 @@ def assemble_from_run_state(
         transition_frames=transition_frames,
         audio_paths=audio_file_paths,
         audio_events=audio_events,
+        transition_type=transition_type,
+        genre_id=genre_id,
     )
 
     for ext_key in ("avi_path", "webp_path", "mp4_path"):
@@ -453,6 +486,9 @@ def assemble_from_run_state(
         "resolution": list(target_res),
         "total_frames": base_res["total_frames"],
         "total_duration_s": base_res["duration_s"],
+        "genre_id": genre_id,
+        "transition_type": transition_type,
+        "story_plan_path": str(story_plan_path.as_posix()),
         "subtitles_path": str(srt_path.as_posix()),
         "entries": timeline_entries,
     }
@@ -460,6 +496,7 @@ def assemble_from_run_state(
     timeline_path.write_text(json.dumps(timeline_manifest, indent=2), encoding="utf-8")
     base_res["timeline_path"] = str(timeline_path.as_posix())
     base_res["subtitles_path"] = str(srt_path.as_posix())
+    base_res["story_plan_path"] = str(story_plan_path.as_posix())
     return base_res
 
 

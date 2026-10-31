@@ -3,8 +3,10 @@ generation:
   primary_model: "wan22-i2v-a14b"
   video_primary: "wan22-i2v-a14b"
   video_fallback: "wan22-ti2v-5b"
+  comfy_url: "http://127.0.0.1:8188"
   fallback_models:
     - "wan22-ti2v-5b"
+    - "wan22-5b-gguf-q4"
     - "ltx23-fp8"
     - "parallax"
     - "kenburns"

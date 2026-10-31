@@ -15,6 +15,11 @@ try:
 except ImportError:
     from render_kenburns import cubic_ease_in_out, prepare_cinematic_canvas
 
+try:
+    from workers.stage_3d import generate_3d_stage_parallax_frames
+except ImportError:
+    from stage_3d import generate_3d_stage_parallax_frames
+
 logger = logging.getLogger("m2a.parallax")
 
 
@@ -42,8 +47,23 @@ def generate_parallax_frames(
     target_res: Tuple[int, int] = (720, 1280),
     duration_s: float = 3.0,
     fps: int = 24,
+    genre_id: str = "shonen",
+    motion_primitive: str = "dolly_zoom_parallax",
+    enable_3d_stage: bool = True,
 ) -> List[Image.Image]:
-    """Renders 2.5D parallax frames with occlusion-filled background and differential layer motion."""
+    """Renders 2.5D/3D multi-plane parallax frames with character cutout, conditional 2D background,
+    depth relighting, and differential 4-layer camera motion.
+    """
+    if enable_3d_stage:
+        return generate_3d_stage_parallax_frames(
+            image_path=Path(image_path),
+            target_res=target_res,
+            duration_s=duration_s,
+            fps=fps,
+            genre_id=genre_id,
+            motion_primitive=motion_primitive,
+        )
+
     img = Image.open(image_path).convert("RGB")
     dst_w, dst_h = target_res
 

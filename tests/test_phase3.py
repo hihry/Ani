@@ -630,6 +630,126 @@ def test_real_world_webtoon_qc_and_ocr_regressions(tmp_path: Path) -> None:
     assert low_nodes[0]["inputs"]["end_at_step"] == 20
 
 
+def test_adversarial_conform_cache_and_inpaint_regressions(tmp_path: Path) -> None:
+    """Verifies adversarial edge-case fixes:
+    1) ClipCache hit does not double-conform (no double 6% zoom or double LAB color transfer).
+    2) Extreme 3:1 horizontal banner (1200x400) inside 512x384 bucket extracts inner crop without double-letterboxing.
+    3) Extreme 1:5 vertical strip (400x2000) conforms cleanly and passes QC v2.
+    4) Wan22ImageToVideoLatent workflows enforce denoise=1.0 even if caller passes denoise<1.0.
+    """
+    # 1. ClipCache hit idempotency on square/landscape panel
+    client, _ = _make_inprocess_comfy_client(tmp_path, mode="normal")
+    specs = load_model_specs()
+    cache = ClipCache(cache_dir=tmp_path / "_cache_idem")
+    provider = ComfyVideoProvider(spec=specs["wan22-5b-gguf-q4"], client=client, cache=cache)
+    sq_plate = _make_clean_anime_panel(tmp_path / "sq_panel.png", size=(640, 600))
+    panel = {"panel_id": "panel_sq", "action_prompt": "subtle breathing", "motion_type": "zoom_in"}
+
+    r1 = provider.generate(
+        panel=panel, clean_plate=sq_plate, duration_s=1.5, seed=77,
+        out_dir=tmp_path / "idem1", target_res=(720, 1280), fps=24,
+    )
+    r2 = provider.generate(
+        panel=panel, clean_plate=sq_plate, duration_s=1.5, seed=77,
+        out_dir=tmp_path / "idem2", target_res=(720, 1280), fps=24,
+    )
+    assert r1.cached is False and r2.cached is True
+    f1 = decode_video_frames(r1.clip_path)
+    f2 = decode_video_frames(r2.clip_path)
+    assert len(f1) == len(f2) == 36
+    assert np.array_equal(np.asarray(f1[0]), np.asarray(f2[0]))
+    assert np.array_equal(np.asarray(f1[-1]), np.asarray(f2[-1]))
+
+    # 2. Extreme 3:1 horizontal banner (1200x400) in 512x384 bucket -> no double-letterboxing
+    wide_plate = _make_clean_anime_panel(tmp_path / "wide_3to1.png", size=(1200, 400))
+    bw, bh = pick_bucket(1200, 400, specs["wan22-5b-gguf-q4"].resolution_buckets)
+    assert (bw, bh) == (512, 384)
+    prep_wide = prepare_input(wide_plate, tmp_path / "prep_wide", target_w=bw, target_h=bh)
+    raw_wide_frames = generate_kenburns_frames(prep_wide, target_res=(bw, bh), duration_s=1.5, fps=16)
+    raw_wide_clip = encode_mjpeg_avi(raw_wide_frames, tmp_path / "raw_wide.avi", fps=16)
+    conf_wide = conform(
+        raw_clip=raw_wide_clip, clean_plate=wide_plate, duration_s=2.0,
+        out_path=tmp_path / "conf_wide.avi", fps=24, width=720, height=1280, native_fps=16,
+    )
+    wide_frames = decode_video_frames(conf_wide)
+    wide_qc = compute_clip_qc_metrics(wide_plate, wide_frames, route="i2v")
+    assert wide_qc["first_frame_fidelity"] >= 0.80, f"Expected 3:1 banner fidelity >= 0.80 without double-letterboxing, got {wide_qc}"
+    assert wide_qc["overall_pass"] is True, f"Expected 3:1 banner to pass QC v2, got {wide_qc}"
+
+    # 3. Extreme 1:5 vertical strip (400x2000) -> conforms cleanly and passes QC v2
+    vstrip_plate = _make_clean_anime_panel(tmp_path / "tall_1to5.png", size=(400, 2000))
+    vbw, vbh = pick_bucket(400, 2000, specs["wan22-5b-gguf-q4"].resolution_buckets)
+    prep_tall = prepare_input(vstrip_plate, tmp_path / "prep_tall", target_w=vbw, target_h=vbh)
+    raw_tall_frames = generate_kenburns_frames(prep_tall, target_res=(vbw, vbh), duration_s=1.5, fps=16)
+    raw_tall_clip = encode_mjpeg_avi(raw_tall_frames, tmp_path / "raw_tall.avi", fps=16)
+    conf_tall = conform(
+        raw_clip=raw_tall_clip, clean_plate=vstrip_plate, duration_s=2.0,
+        out_path=tmp_path / "conf_tall.avi", fps=24, width=720, height=1280, native_fps=16,
+    )
+    tall_frames = decode_video_frames(conf_tall)
+    tall_qc = compute_clip_qc_metrics(vstrip_plate, tall_frames, route="i2v")
+    assert tall_qc["overall_pass"] is True, f"Expected 1:5 vertical strip to pass QC v2, got {tall_qc}"
+
+    # 4. Wan22ImageToVideoLatent workflows enforce denoise=1.0 even if caller passes denoise=0.65
+    gguf_tpl = load_template(REPO_ROOT / "workflows" / "comfyui" / "wan22_ti2v5b_gguf_api.json")
+    gguf_inj = inject(
+        gguf_tpl, image_name="in.png", pos_prompt="pos", neg_prompt="neg",
+        seed=42, width=512, height=384, frames=25, steps=12, cfg=3.5, fps=16, denoise=0.65,
+    )
+    samplers = [n for n in gguf_inj.values() if isinstance(n, dict) and n.get("_meta", {}).get("title") == "M2A_SAMPLER"]
+    assert samplers[0]["inputs"]["denoise"] == 1.0
+
+
+def test_qc_rejects_localized_anatomical_corruption_and_passes_articulated_2d(tmp_path: Path) -> None:
+    """Verifies that localized temporal anatomical corruption (e.g. second-half melted face
+    or early-frame hallucinated extra limb/puppet patch) is rejected by `compute_clip_qc_metrics`
+    while articulated 2D character animation passes cleanly.
+    """
+    from workers.stage_3d import generate_3d_stage_parallax_frames
+
+    plate = _make_clean_anime_panel(tmp_path / "char_plate.png", size=(540, 960))
+    clean_frames = generate_3d_stage_parallax_frames(
+        plate, target_res=(540, 960), duration_s=1.5, fps=24, genre_id="shonen", motion_primitive="[aura_awakening]"
+    )
+    clean_qc = compute_clip_qc_metrics(plate, clean_frames, route="i2v")
+    assert clean_qc["overall_pass"] is True, f"Expected articulated 2D clip to pass QC, got {clean_qc}"
+
+    # 1. Simulate second-half localized face melting (frames N//2 .. N-1)
+    melted_frames = [f.copy() for f in clean_frames]
+    for idx in range(len(melted_frames) // 2, len(melted_frames)):
+        arr = np.asarray(melted_frames[idx], dtype=np.uint8).copy()
+        h, w, _ = arr.shape
+        y0, y1 = int(h * 0.28), int(h * 0.48)
+        x0, x1 = int(w * 0.34), int(w * 0.66)
+        yy, xx = np.meshgrid(np.arange(y1 - y0), np.arange(x1 - x0), indexing="ij")
+        # Simulate localized melted facial features/smearing in the head region
+        melt_wave = (np.sin(yy * 0.25 + xx * 0.15) * 95.0).astype(np.int16)
+        arr[y0:y1, x0:x1, 0] = np.clip(arr[y0:y1, x0:x1, 0].astype(np.int16) - melt_wave, 0, 255).astype(np.uint8)
+        arr[y0:y1, x0:x1, 1] = np.clip(arr[y0:y1, x0:x1, 1].astype(np.int16) + melt_wave, 0, 255).astype(np.uint8)
+        arr[y0:y1, x0:x1, 2] = np.clip(255 - arr[y0:y1, x0:x1, 2].astype(np.int16), 0, 255).astype(np.uint8)
+        melted_frames[idx] = Image.fromarray(arr)
+
+    melted_qc = compute_clip_qc_metrics(plate, melted_frames, route="i2v")
+    assert melted_qc["overall_pass"] is False, f"Expected localized face melting to fail QC, got {melted_qc}"
+    assert "identity_drift" in melted_qc["reasons"]
+
+    # 2. Simulate early-frame hallucinated extra limb/puppet burst (frames 2 .. 10)
+    puppet_frames = [f.copy() for f in clean_frames]
+    for idx in range(2, min(11, len(puppet_frames))):
+        arr = np.asarray(puppet_frames[idx], dtype=np.uint8).copy()
+        h, w, _ = arr.shape
+        y0, y1 = int(h * 0.45), int(h * 0.68)
+        x0, x1 = int(w * 0.35), int(w * 0.65)
+        yy, xx = np.meshgrid(np.arange(y1 - y0), np.arange(x1 - x0), indexing="ij")
+        arr[y0:y1, x0:x1, 0] = ((xx * 13 + yy * 7) % 255).astype(np.uint8)
+        arr[y0:y1, x0:x1, 1] = ((xx * 5 + yy * 19) % 180).astype(np.uint8)
+        arr[y0:y1, x0:x1, 2] = 30
+        puppet_frames[idx] = Image.fromarray(arr)
+
+    puppet_qc = compute_clip_qc_metrics(plate, puppet_frames, route="i2v")
+    assert puppet_qc["overall_pass"] is False, f"Expected early-frame hallucinated limb/puppet to fail QC, got {puppet_qc}"
+    assert "identity_drift" in puppet_qc["reasons"]
+
 @pytest.mark.eval_qc
 @pytest.mark.eval
 @pytest.mark.worker
@@ -836,6 +956,5 @@ def test_probe_models_and_slideshow_detector(tmp_path: Path) -> None:
     assert audit_froz["passed"] is False
     assert len(audit_froz["frozen_clips"]) == 1
     assert probe_main(["--check-run", str(frozen_run)]) == 1
-
 
 

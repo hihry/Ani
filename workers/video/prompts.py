@@ -19,7 +19,7 @@ _CAMERA_HINTS = {
     "static": "locked camera with subtle breathing and hair movement",
 }
 
-_STYLE_LOCK = "2D anime style, subtle motion, consistent character line art, stable background"
+_STYLE_LOCK = "low contrast, 2D anime animation, expressive character movement, flowing hair and cloth motion, consistent character line art"
 
 
 def build_prompt(
@@ -33,7 +33,7 @@ def build_prompt(
         or u.get("action_description")
         or panel.get("scene_description")
         or u.get("scene_description")
-        or "character subtle breathing, hair and cloth swaying gently in the wind"
+        or "character turning head and breathing, hair and cloth swaying in the wind"
     ).strip()
 
     motion_type = str(
@@ -54,6 +54,8 @@ def build_prompt(
         positive = " ".join(words[:55]).rstrip(",") + ", " + _STYLE_LOCK
 
     default_neg = (
+        "静止, 静止不动的画面, static, still image, frozen, motionless, "
+        "色调艳丽, 过曝, overexposed, oversaturated, neon flash, "
         "text, speech bubble, watermark, subtitles, deformed face, extra limbs, "
         "3d render, photorealistic, blurry, low quality, flicker"
     )

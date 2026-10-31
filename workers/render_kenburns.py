@@ -7,10 +7,63 @@ with sub-pixel bilinear sampling (eliminating 1px stair-step jitter).
 """
 from pathlib import Path
 from typing import List, Tuple
+import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 import logging
 
 logger = logging.getLogger("m2a.kenburns")
+
+
+def _trim_outer_white_gutters(img: Image.Image) -> Image.Image:
+    """Trims top/bottom webtoon white gutter bands on sliced panels (where artwork reaches the left edge
+    and a protruding speech bubble left a white top/bottom margin above the horizontal panel border),
+    while leaving full-page images (which have white side borders) completely untouched.
+    """
+    arr = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    h, w, _ = arr.shape
+    if h < 64 or w < 64:
+        return img
+
+    gray = arr.mean(axis=2)
+    chroma = arr.max(axis=2).astype(np.int16) - arr.min(axis=2).astype(np.int16)
+    is_white = (gray >= 240.0) & (chroma <= 18)
+
+    # Full-page benchmark images (e.g. sample_page_1.png) have white side margins at x=0..30; do not crop them
+    if float(is_white[:, :8].mean()) >= 0.65 and float(is_white[:, -8:].mean()) >= 0.65:
+        return img
+
+    if float((~is_white).mean()) < 0.45:
+        return img
+
+    row_white_ratio = is_white.mean(axis=1)
+    top = 0
+    max_top = int(h * 0.35)
+    while top < max_top and (row_white_ratio[top] >= 0.70 and gray[top].mean() >= 238.0):
+        top += 1
+    if top >= 4:
+        border_scan = min(h - 16, top + 12)
+        for r in range(top, border_scan):
+            if gray[r].mean() < 115.0:
+                top = r + 1
+    else:
+        top = 0
+    while top < min(h - 32, top + 6) and gray[top].mean() < 35.0 and gray[top].std() < 25.0:
+        top += 1
+
+    bot = h
+    min_bot = int(h * 0.65)
+    while bot > min_bot and (row_white_ratio[bot - 1] >= 0.70 and gray[bot - 1].mean() >= 235.0):
+        bot -= 1
+    border_scan = max(top + 16, bot - 10)
+    for r in range(bot - 1, border_scan - 1, -1):
+        if gray[r].mean() < 105.0 and gray[r].std() < 65.0:
+            bot = r
+    while bot > max(top + 32, bot - 6) and gray[bot - 1].mean() < 35.0 and gray[bot - 1].std() < 25.0:
+        bot -= 1
+
+    if (bot - top) >= int(h * 0.55) and (top > 0 or bot < h):
+        return img.crop((0, top, w, bot))
+    return img
 
 
 def cubic_ease_in_out(t: float) -> float:
@@ -38,6 +91,7 @@ def prepare_cinematic_canvas(
         Gaussian-blurred background fill so 100% of horizontal artwork, characters,
         and action remain visible instead of losing 70%+ of their width to center-cropping.
     """
+    img = _trim_outer_white_gutters(img)
     src_w, src_h = img.size
     dst_w, dst_h = target_res
     canvas_w = max(1, int(round(dst_w * overscan)))
@@ -60,35 +114,56 @@ def prepare_cinematic_canvas(
         top = (sh - canvas_h) // 2
         return resized.crop((left, top, left + canvas_w, top + canvas_h))
 
-    bg_scale = max(canvas_w / float(src_w), canvas_h / float(src_h))
-    bg_w = max(canvas_w, int(round(src_w * bg_scale)))
-    bg_h = max(canvas_h, int(round(src_h * bg_scale)))
-    bg_img = img.resize((bg_w, bg_h), Image.Resampling.BILINEAR)
-    bg_left = (bg_w - canvas_w) // 2
-    bg_top = (bg_h - canvas_h) // 2
-    bg_crop = bg_img.crop((bg_left, bg_top, bg_left + canvas_w, bg_top + canvas_h))
-    bg_crop = bg_crop.filter(ImageFilter.GaussianBlur(radius=18))
-    bg_crop = ImageEnhance.Brightness(bg_crop).enhance(0.45)
-
-    fg_w = int(round(canvas_w * 0.94))
-    fg_scale = fg_w / float(max(1, src_w))
-    fg_h = max(1, int(round(src_h * fg_scale)))
-    if fg_h > int(canvas_h * 0.92):
-        fg_h = int(round(canvas_h * 0.92))
-        fg_scale = fg_h / float(max(1, src_h))
-        fg_w = max(1, int(round(src_w * fg_scale)))
-
+    # Build a natural top/bottom atmospheric extension by mirror-extending the top and bottom 28% of the panel
+    fg_w = canvas_w
+    fg_scale = canvas_w / float(max(1, src_w))
+    fg_h = min(canvas_h, max(1, int(round(src_h * fg_scale))))
     fg_img = img.resize((fg_w, fg_h), Image.Resampling.LANCZOS)
-    paste_x = (canvas_w - fg_w) // 2
+
+    paste_x = 0
     paste_y = (canvas_h - fg_h) // 2
 
-    bg_crop.paste(fg_img, (paste_x, paste_y))
-    draw = ImageDraw.Draw(bg_crop)
-    draw.rectangle(
-        [paste_x - 2, paste_y - 2, paste_x + fg_w + 1, paste_y + fg_h + 1],
-        outline=(20, 20, 28),
-        width=2,
-    )
+    bg_canvas = Image.new("RGB", (canvas_w, canvas_h))
+    strip_h = max(16, fg_h // 3)
+    if paste_y > 0:
+        top_strip = fg_img.crop((0, 0, fg_w, strip_h)).transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        top_fill = top_strip.resize((canvas_w, paste_y + 24), Image.Resampling.BILINEAR)
+        bg_canvas.paste(top_fill, (0, 0))
+    if paste_y + fg_h < canvas_h:
+        bot_need = canvas_h - (paste_y + fg_h)
+        bot_strip = fg_img.crop((0, max(0, fg_h - strip_h), fg_w, fg_h)).transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+        bot_fill = bot_strip.resize((canvas_w, bot_need + 24), Image.Resampling.BILINEAR)
+        bg_canvas.paste(bot_fill, (0, max(0, paste_y + fg_h - 24)))
+    bg_canvas.paste(fg_img, (0, paste_y))
+    bg_crop = bg_canvas.filter(ImageFilter.GaussianBlur(radius=22))
+
+    # Apply darkening strictly outside the active panel (in the letterbox bars) with a smooth ramp
+    # so the active panel interior never gets a dark horizontal shadow band across its top/bottom edges.
+    bg_arr = np.asarray(bg_crop, dtype=np.float32)
+    gain_1d = np.ones(canvas_h, dtype=np.float32)
+    ramp_len = min(28, max(8, paste_y))
+    if paste_y > 0:
+        gain_1d[:paste_y] = 0.58
+        if ramp_len > 0:
+            gain_1d[paste_y - ramp_len : paste_y] = np.linspace(0.58, 0.96, ramp_len, dtype=np.float32)
+    bot_start = paste_y + fg_h
+    if bot_start < canvas_h:
+        gain_1d[bot_start:] = 0.58
+        bot_ramp = min(28, canvas_h - bot_start)
+        if bot_ramp > 0:
+            gain_1d[bot_start : bot_start + bot_ramp] = np.linspace(0.96, 0.58, bot_ramp, dtype=np.float32)
+    bg_arr = np.clip(bg_arr * gain_1d[:, None, None], 0.0, 255.0).astype(np.uint8)
+    bg_crop = Image.fromarray(bg_arr, mode="RGB")
+
+    # Micro 5px anti-aliased edge feather so the panel joins the atmospheric extension with zero dark band
+    feather_px = min(5, max(2, fg_h // 64))
+    alpha_1d = np.ones(fg_h, dtype=np.float32)
+    ramp = np.linspace(0.0, 1.0, feather_px, dtype=np.float32)
+    alpha_1d[:feather_px] = ramp
+    alpha_1d[-feather_px:] = ramp[::-1]
+    alpha_mask = Image.fromarray((alpha_1d[:, None] * 255.0).astype(np.uint8).repeat(fg_w, axis=1), mode="L")
+
+    bg_crop.paste(fg_img, (paste_x, paste_y), mask=alpha_mask)
     return bg_crop
 
 

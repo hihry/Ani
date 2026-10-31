@@ -1,0 +1,1755 @@
+# M2A 18-Genre Theme & Context Profiles (Schema v2)
+default_genre: shonen
+aliases:
+  violence: seinen
+  violence_action: action_adventure
+  action: action_adventure
+  romance: romance_drama
+  horror: horror_thriller
+  dark_mystery_horror: horror_thriller
+  epic_awakening: isekai
+  comedy: comedy_slice_of_life
+  slice_of_life: comedy_slice_of_life
+genres:
+  shonen:
+    category: demographic
+    recommended_camera: whip_pan
+    transition_type: impact_flash
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[aura_awakening]'
+    - '[sword_slash]'
+    - '[impact_recoil]'
+    bg_prompt: masterpiece anime background, shattered rocky battleground, glowing
+      blue energy craters, dramatic storm clouds, ufotable style volumetric lighting
+    bg_negative_prompt: photorealistic, 3d render, blurry, watermark, text, speech
+      bubble, flat washed out
+    relighting:
+      color_temperature_kelvin: 5800
+      rim_light_rgb:
+      - 70
+      - 185
+      - 255
+      bloom_intensity: 0.42
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.25
+    audio:
+      kokoro_voice: am_adam
+      edge_voice: en-US-GuyNeural
+      rate: +8%
+      pitch: +2Hz
+      bgm_style: shonen_taiko_heroic
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.0
+      ducking_attenuation_db: -11.0
+      bgm_ducked_lufs: -27.0
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 80
+      exponential_release_ms: 320
+      sfx_peak_dbfs: -6.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - diagonal_action_slash
+    - full_bleed_splash
+    - vertical_webtoon_scroll
+    upstream_datasets:
+    - sakuga_42m
+    - manga109_suite
+    - popmanga_magi
+    - animerun_atd12k
+    core_themes:
+    - action
+    - adventure
+    - friendship
+    - personal_growth
+    - limit_breaker_awakening
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, shattered rocky battleground,
+        glowing blue energy craters, dramatic storm clouds, ufotable style volumetric
+        lighting
+      negative_prompt: photorealistic, 3d render, blurry, watermark, text, speech
+        bubble, flat washed out
+      depth_parallax_scale: 1.25
+      kelvin: 5800
+      rim_light_rgb:
+      - 70
+      - 185
+      - 255
+      bloom_intensity: 0.42
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[aura_awakening]'
+      - '[sword_slash]'
+      - '[impact_recoil]'
+      vfx_preset: speedlines_sparks_aura
+      transition: impact_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_adam
+        edge_voice: en-US-GuyNeural
+        rate: +8%
+        pitch: +2Hz
+      bgm_style: driving taiko drums, electric guitar riff, heroic orchestral brass
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.0
+      ducking_db: -11.0
+      bgm_ducked_lufs: -27.0
+      min_snr_db: 11.0
+      lookahead_ms: 80
+      release_ms: 320
+      sfx_peak_dbfs: -6.0
+  shojo:
+    category: demographic
+    recommended_camera: zoom_in
+    transition_type: dreamy_dissolve
+    vfx_style: sakura_petals_soft_sparkles
+    motion_primitives:
+    - '[shojo_sparkle_breeze]'
+    - '[intimate_gaze_shift]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece anime background, sunlit high school courtyard with falling
+      cherry blossom petals, soft pastel bokeh, warm golden hour halation, Kyoto Animation
+      style
+    bg_negative_prompt: dark gritty gore, harsh shadows, photorealistic, text, watermark
+    relighting:
+      color_temperature_kelvin: 4400
+      rim_light_rgb:
+      - 255
+      - 210
+      - 225
+      bloom_intensity: 0.55
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 0.85
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-JennyNeural
+      rate: -2%
+      pitch: +4Hz
+      bgm_style: shojo_piano_strings
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_attenuation_db: -8.0
+      bgm_ducked_lufs: -30.0
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 90
+      exponential_release_ms: 600
+      sfx_peak_dbfs: -12.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - shojo_open_flower_borderless
+    - inset_reaction_overlay
+    - intimate_two_shot_close
+    upstream_datasets:
+    - manga109_suite
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    - animeshooter
+    core_themes:
+    - romance
+    - emotional_bonds
+    - relationships
+    - school_life
+    - inner_monologue
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, sunlit high school courtyard
+        with falling cherry blossom petals, soft pastel bokeh, warm golden hour halation,
+        Kyoto Animation style
+      negative_prompt: dark gritty gore, harsh shadows, photorealistic, text, watermark
+      depth_parallax_scale: 0.85
+      kelvin: 4400
+      rim_light_rgb:
+      - 255
+      - 210
+      - 225
+      bloom_intensity: 0.55
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[shojo_sparkle_breeze]'
+      - '[intimate_gaze_shift]'
+      - '[dramatic_turn]'
+      vfx_preset: sakura_petals_soft_sparkles
+      transition: dreamy_dissolve
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-JennyNeural
+        rate: -2%
+        pitch: +4Hz
+      bgm_style: delicate solo piano, warm lyrical strings, gentle wind chimes
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_db: -8.0
+      bgm_ducked_lufs: -30.0
+      min_snr_db: 12.0
+      lookahead_ms: 90
+      release_ms: 600
+      sfx_peak_dbfs: -12.0
+  seinen:
+    category: demographic
+    recommended_camera: zoom_out
+    transition_type: fade_through_black
+    vfx_style: ash_embers_heavy_rain
+    motion_primitives:
+    - '[cape_wind_standoff]'
+    - '[sword_slash]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece dark anime background, ash-covered medieval battlefield
+      under eclipse sky, heavy crosshatching ink shadows, cold steel and embers, MAPPA
+      style
+    bg_negative_prompt: bright pastel, chibi, cartoon, text, speech bubble, watermark
+    relighting:
+      color_temperature_kelvin: 6800
+      rim_light_rgb:
+      - 210
+      - 65
+      - 55
+      bloom_intensity: 0.22
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.15
+    audio:
+      kokoro_voice: am_michael
+      edge_voice: en-US-ChristopherNeural
+      rate: -6%
+      pitch: -5Hz
+      bgm_style: seinen_cello_war_drone
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -19.0
+      ducking_attenuation_db: -10.0
+      bgm_ducked_lufs: -29.0
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 80
+      exponential_release_ms: 450
+      sfx_peak_dbfs: -6.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - full_bleed_splash
+    - split_screen_standoff
+    - claustrophobic_horror_grid
+    upstream_datasets:
+    - manga109_suite
+    - popmanga_magi
+    - sakuga_42m
+    - zarxrax_anime_seg
+    core_themes:
+    - dark_gritty_realism
+    - psychological_weight
+    - moral_ambiguity
+    - brutal_warfare
+    stage_3d:
+      illustrious_bg_prompt: masterpiece dark anime background, ash-covered medieval
+        battlefield under eclipse sky, heavy crosshatching ink shadows, cold steel
+        and embers, MAPPA style
+      negative_prompt: bright pastel, chibi, cartoon, text, speech bubble, watermark
+      depth_parallax_scale: 1.15
+      kelvin: 6800
+      rim_light_rgb:
+      - 210
+      - 65
+      - 55
+      bloom_intensity: 0.22
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[cape_wind_standoff]'
+      - '[sword_slash]'
+      - '[dramatic_turn]'
+      vfx_preset: ash_embers_heavy_rain
+      transition: fade_through_black
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_michael
+        edge_voice: en-US-ChristopherNeural
+        rate: -6%
+        pitch: -5Hz
+      bgm_style: low cello drone, solemn war horns, metallic percussion
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -19.0
+      ducking_db: -10.0
+      bgm_ducked_lufs: -29.0
+      min_snr_db: 11.0
+      lookahead_ms: 80
+      release_ms: 450
+      sfx_peak_dbfs: -6.0
+  josei:
+    category: demographic
+    recommended_camera: zoom_in
+    transition_type: dreamy_dissolve
+    vfx_style: city_rain_bokeh_dust
+    motion_primitives:
+    - '[intimate_gaze_shift]'
+    - '[dramatic_turn]'
+    - '[cape_wind_standoff]'
+    bg_prompt: masterpiece anime background, Tokyo apartment balcony at twilight overlooking
+      city neon rain reflections, warm interior lamp glow, cinematic shallow depth
+      of field
+    bg_negative_prompt: chibi, exaggerated cartoon, sci-fi monster, watermark, text
+    relighting:
+      color_temperature_kelvin: 4100
+      rim_light_rgb:
+      - 245
+      - 185
+      - 140
+      bloom_intensity: 0.35
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 0.8
+    audio:
+      kokoro_voice: af_sarah
+      edge_voice: en-US-AriaNeural
+      rate: -3%
+      pitch: -1Hz
+      bgm_style: josei_jazz_rain_piano
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_attenuation_db: -8.5
+      bgm_ducked_lufs: -30.5
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 85
+      exponential_release_ms: 550
+      sfx_peak_dbfs: -12.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - intimate_two_shot_close
+    - inset_reaction_overlay
+    - vertical_webtoon_scroll
+    upstream_datasets:
+    - manga109_suite
+    - deepghs_anime_bg
+    - animeshooter
+    - zarxrax_anime_seg
+    core_themes:
+    - grounded_relationships
+    - career_struggles
+    - mature_romance
+    - urban_melancholy
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, Tokyo apartment balcony
+        at twilight overlooking city neon rain reflections, warm interior lamp glow,
+        cinematic shallow depth of field
+      negative_prompt: chibi, exaggerated cartoon, sci-fi monster, watermark, text
+      depth_parallax_scale: 0.8
+      kelvin: 4100
+      rim_light_rgb:
+      - 245
+      - 185
+      - 140
+      bloom_intensity: 0.35
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[intimate_gaze_shift]'
+      - '[dramatic_turn]'
+      - '[cape_wind_standoff]'
+      vfx_preset: city_rain_bokeh_dust
+      transition: dreamy_dissolve
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_sarah
+        edge_voice: en-US-AriaNeural
+        rate: -3%
+        pitch: -1Hz
+      bgm_style: acoustic guitar, mellow lo-fi jazz piano, rain ambience
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_db: -8.5
+      bgm_ducked_lufs: -30.5
+      min_snr_db: 12.0
+      lookahead_ms: 85
+      release_ms: 550
+      sfx_peak_dbfs: -12.0
+  kodomomuke:
+    category: demographic
+    recommended_camera: pan_right
+    transition_type: wipe_cut
+    vfx_style: star_sparkles_bouncy_lines
+    motion_primitives:
+    - '[sports_kinetic_sprint]'
+    - '[aura_awakening]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece vibrant anime background, sunny emerald meadow with fluffy
+      cumulus clouds and colorful town in distance, clean cel shading, OLM studio
+      style
+    bg_negative_prompt: dark horror, blood, gritty, desaturated, text, watermark
+    relighting:
+      color_temperature_kelvin: 5600
+      rim_light_rgb:
+      - 255
+      - 245
+      - 160
+      bloom_intensity: 0.38
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.0
+    audio:
+      kokoro_voice: af_sky
+      edge_voice: en-US-AnaNeural
+      rate: +5%
+      pitch: +6Hz
+      bgm_style: kodomomuke_marimba_march
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -20.0
+      ducking_attenuation_db: -9.5
+      bgm_ducked_lufs: -29.5
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 70
+      exponential_release_ms: 300
+      sfx_peak_dbfs: -9.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - four_koma_gag_strip
+    - full_bleed_splash
+    - split_screen_standoff
+    upstream_datasets:
+    - sakuga_42m
+    - animerun_atd12k
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - light_hearted_adventure
+    - friendship_morals
+    - educational_discovery
+    - playful_companions
+    stage_3d:
+      illustrious_bg_prompt: masterpiece vibrant anime background, sunny emerald meadow
+        with fluffy cumulus clouds and colorful town in distance, clean cel shading,
+        OLM studio style
+      negative_prompt: dark horror, blood, gritty, desaturated, text, watermark
+      depth_parallax_scale: 1.0
+      kelvin: 5600
+      rim_light_rgb:
+      - 255
+      - 245
+      - 160
+      bloom_intensity: 0.38
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[sports_kinetic_sprint]'
+      - '[aura_awakening]'
+      - '[dramatic_turn]'
+      vfx_preset: star_sparkles_bouncy_lines
+      transition: wipe_cut
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_sky
+        edge_voice: en-US-AnaNeural
+        rate: +5%
+        pitch: +6Hz
+      bgm_style: cheerful woodwinds, xylophone marimba, upbeat brass march
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -20.0
+      ducking_db: -9.5
+      bgm_ducked_lufs: -29.5
+      min_snr_db: 12.0
+      lookahead_ms: 70
+      release_ms: 300
+      sfx_peak_dbfs: -9.0
+  action_adventure:
+    category: core_genre
+    recommended_camera: whip_pan
+    transition_type: impact_flash
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[sword_slash]'
+    - '[aura_awakening]'
+    - '[impact_recoil]'
+    bg_prompt: masterpiece anime background, ancient crumbling temple arena surrounded
+      by lightning and floating stone pillars, dynamic perspective, ufotable style
+    bg_negative_prompt: photorealistic, flat lighting, blurry, watermark, text
+    relighting:
+      color_temperature_kelvin: 5900
+      rim_light_rgb:
+      - 85
+      - 200
+      - 255
+      bloom_intensity: 0.45
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.25
+    audio:
+      kokoro_voice: am_adam
+      edge_voice: en-US-GuyNeural
+      rate: +10%
+      pitch: +2Hz
+      bgm_style: shonen_taiko_heroic
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.0
+      ducking_attenuation_db: -11.0
+      bgm_ducked_lufs: -27.0
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 80
+      exponential_release_ms: 350
+      sfx_peak_dbfs: -6.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - diagonal_action_slash
+    - vertical_webtoon_scroll
+    - full_bleed_splash
+    upstream_datasets:
+    - sakuga_42m
+    - animerun_atd12k
+    - toon2data_webtoon
+    - popmanga_magi
+    core_themes:
+    - martial_arts_combat
+    - epic_quest
+    - boss_raid
+    - elemental_techniques
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, ancient temple ruins suspended
+        over roaring waterfall chasm, dynamic god rays, ufotable cinematic environment
+      negative_prompt: static flat wall, photorealistic, blurry, text, watermark
+      depth_parallax_scale: 1.3
+      kelvin: 5900
+      rim_light_rgb:
+      - 255
+      - 120
+      - 50
+      bloom_intensity: 0.45
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[sword_slash]'
+      - '[aura_awakening]'
+      - '[impact_recoil]'
+      vfx_preset: slash_trails_debris_shockwave
+      transition: impact_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_adam
+        edge_voice: en-US-GuyNeural
+        rate: +10%
+        pitch: +2Hz
+      bgm_style: taiko war drums, shakuhachi flute, fast staccato strings
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.0
+      ducking_db: -11.0
+      bgm_ducked_lufs: -27.0
+      min_snr_db: 11.0
+      lookahead_ms: 80
+      release_ms: 350
+      sfx_peak_dbfs: -6.0
+  comedy_slice_of_life:
+    category: core_genre
+    recommended_camera: pan_right
+    transition_type: wipe_cut
+    vfx_style: star_sparkles_bouncy_lines
+    motion_primitives:
+    - '[dramatic_turn]'
+    - '[shojo_sparkle_breeze]'
+    bg_prompt: masterpiece anime background, cozy sunlit school clubroom with afternoon
+      breeze through curtains, warm cel shading, CloverWorks style
+    bg_negative_prompt: dark horror, gore, photorealistic, text, watermark
+    relighting:
+      color_temperature_kelvin: 5200
+      rim_light_rgb:
+      - 255
+      - 235
+      - 190
+      bloom_intensity: 0.34
+      edge_light_wrap_px: 3
+    depth_parallax_scale: 0.9
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-JennyNeural
+      rate: +6%
+      pitch: +3Hz
+      bgm_style: comedy_pizzicato_bounce
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -21.0
+      ducking_attenuation_db: -9.0
+      bgm_ducked_lufs: -30.0
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 70
+      exponential_release_ms: 280
+      sfx_peak_dbfs: -8.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - four_koma_gag_strip
+    - inset_reaction_overlay
+    - split_screen_standoff
+    upstream_datasets:
+    - manga109_suite
+    - popmanga_magi
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - everyday_humor
+    - school_club_life
+    - deadpan_reactions
+    - wholesome_friendship
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, cozy Japanese shopping
+        street and school classroom in bright afternoon sunlight, crisp cel-shaded
+        colors, CloverWorks style
+      negative_prompt: dark horror, gore, gloomy, blurry, watermark, text
+      depth_parallax_scale: 0.9
+      kelvin: 5400
+      rim_light_rgb:
+      - 255
+      - 240
+      - 195
+      bloom_intensity: 0.3
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[dramatic_turn]'
+      - '[sports_kinetic_sprint]'
+      - '[intimate_gaze_shift]'
+      vfx_preset: comedic_sweatdrop_shock_lines
+      transition: wipe_cut
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-JennyNeural
+        rate: +6%
+        pitch: +3Hz
+      bgm_style: pizzicato strings, quirky recorder/ukulele, upbeat acoustic bounce
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -21.0
+      ducking_db: -9.0
+      bgm_ducked_lufs: -30.0
+      min_snr_db: 12.0
+      lookahead_ms: 70
+      release_ms: 280
+      sfx_peak_dbfs: -8.0
+  romance_drama:
+    category: core_genre
+    recommended_camera: zoom_in
+    transition_type: dreamy_dissolve
+    vfx_style: sakura_petals_soft_sparkles
+    motion_primitives:
+    - '[intimate_gaze_shift]'
+    - '[shojo_sparkle_breeze]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece anime background, sunset pedestrian bridge overlooking
+      glowing river and sakura trees, Makoto Shinkai style sky and lens flare
+    bg_negative_prompt: dark gore, monster, harsh shadows, watermark, text
+    relighting:
+      color_temperature_kelvin: 4300
+      rim_light_rgb:
+      - 255
+      - 195
+      - 210
+      bloom_intensity: 0.52
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 0.85
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-AriaNeural
+      rate: -4%
+      pitch: +1Hz
+      bgm_style: shojo_piano_strings
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_attenuation_db: -8.0
+      bgm_ducked_lufs: -30.0
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 90
+      exponential_release_ms: 600
+      sfx_peak_dbfs: -12.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - intimate_two_shot_close
+    - shojo_open_flower_borderless
+    - inset_reaction_overlay
+    upstream_datasets:
+    - manga109_suite
+    - animeshooter
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - confession_scene
+    - heartbreak_tears
+    - unspoken_longing
+    - emotional_catharsis
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, pedestrian overpass bridge
+        at sunset with glowing orange clouds and distant train tracks, Makoto Shinkai
+        lighting
+      negative_prompt: violence, monsters, harsh neon, text, watermark
+      depth_parallax_scale: 0.85
+      kelvin: 4200
+      rim_light_rgb:
+      - 255
+      - 175
+      - 130
+      bloom_intensity: 0.52
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[intimate_gaze_shift]'
+      - '[shojo_sparkle_breeze]'
+      - '[cape_wind_standoff]'
+      vfx_preset: golden_dust_motes_teardrop_shimmer
+      transition: dreamy_dissolve
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-AriaNeural
+        rate: -4%
+        pitch: +1Hz
+      bgm_style: emotional grand piano solo swelling into lush string quartet
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.0
+      ducking_db: -8.0
+      bgm_ducked_lufs: -30.0
+      min_snr_db: 12.0
+      lookahead_ms: 90
+      release_ms: 600
+      sfx_peak_dbfs: -12.0
+  scifi_fantasy:
+    category: core_genre
+    recommended_camera: zoom_out
+    transition_type: light_burst_flash
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[aura_awakening]'
+    - '[cape_wind_standoff]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece anime background, astral citadel with floating holographic
+      magic circles and nebula sky, vibrant cyan and violet luminescence
+    bg_negative_prompt: mundane room, blurry, low quality, text, watermark
+    relighting:
+      color_temperature_kelvin: 6200
+      rim_light_rgb:
+      - 110
+      - 210
+      - 255
+      bloom_intensity: 0.48
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.2
+    audio:
+      kokoro_voice: af_sarah
+      edge_voice: en-US-JennyNeural
+      rate: +0%
+      pitch: +0Hz
+      bgm_style: isekai_choir_orchestral
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -18.0
+      ducking_attenuation_db: -10.0
+      bgm_ducked_lufs: -28.0
+      min_dialogue_to_bgm_snr_db: 11.5
+      lookahead_attack_ms: 80
+      exponential_release_ms: 420
+      sfx_peak_dbfs: -7.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - full_bleed_splash
+    - vertical_webtoon_scroll
+    - inset_reaction_overlay
+    upstream_datasets:
+    - sakuga_42m
+    - deepghs_anime_bg
+    - animeshooter
+    - zarxrax_anime_seg
+    core_themes:
+    - arcane_spellcasting
+    - cyberpunk_megacity
+    - ancient_relics
+    - world_building
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, floating astral library
+        and glowing magic runes interspersed with neon holographic spires, volumetric
+        cyan-violet god rays
+      negative_prompt: mundane office, blurry, low contrast, text, watermark
+      depth_parallax_scale: 1.25
+      kelvin: 6400
+      rim_light_rgb:
+      - 95
+      - 220
+      - 255
+      bloom_intensity: 0.48
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[aura_awakening]'
+      - '[isekai_hud_materialize]'
+      - '[cape_wind_standoff]'
+      vfx_preset: magic_runes_mana_particles_bloom
+      transition: light_burst_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_sarah
+        edge_voice: en-US-JennyNeural
+        rate: +0%
+        pitch: +0Hz
+      bgm_style: ethereal choir + analog synth arpeggios + orchestral celesta
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -18.0
+      ducking_db: -10.0
+      bgm_ducked_lufs: -28.0
+      min_snr_db: 11.5
+      lookahead_ms: 80
+      release_ms: 420
+      sfx_peak_dbfs: -7.0
+  horror_thriller:
+    category: core_genre
+    recommended_camera: zoom_in
+    transition_type: glitch_cut
+    vfx_style: ash_embers_heavy_rain
+    motion_primitives:
+    - '[dramatic_turn]'
+    - '[impact_recoil]'
+    bg_prompt: masterpiece dark horror anime background, abandoned Moonlit corridor
+      with creeping abyssal shadows and eerie mist, heavy vignette, Junji Ito meets
+      MAPPA atmosphere
+    bg_negative_prompt: bright sunny pastel, cheerful, cute, text, watermark
+    relighting:
+      color_temperature_kelvin: 7200
+      rim_light_rgb:
+      - 120
+      - 175
+      - 195
+      bloom_intensity: 0.18
+      edge_light_wrap_px: 3
+    depth_parallax_scale: 1.1
+    audio:
+      kokoro_voice: am_michael
+      edge_voice: en-US-ChristopherNeural
+      rate: -8%
+      pitch: -4Hz
+      bgm_style: horror_sub_drone_heartbeat
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -24.0
+      ducking_attenuation_db: -8.0
+      bgm_ducked_lufs: -32.0
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 60
+      exponential_release_ms: 500
+      sfx_peak_dbfs: -5.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - claustrophobic_horror_grid
+    - full_bleed_splash
+    - vertical_webtoon_scroll
+    upstream_datasets:
+    - manga109_suite
+    - toon2data_webtoon
+    - popmanga_magi
+    - zarxrax_anime_seg
+    core_themes:
+    - psychological_dread
+    - supernatural_apparition
+    - survival_suspense
+    - uncanny_reveal
+    stage_3d:
+      illustrious_bg_prompt: masterpiece dark horror anime background, flickering
+        fluorescent hospital corridor shrouded in abyssal fog, heavy vignette, cold
+        desaturated teal shadows
+      negative_prompt: bright sunny cheerful, pastel flowers, cute chibi, text, watermark
+      depth_parallax_scale: 1.1
+      kelvin: 7500
+      rim_light_rgb:
+      - 60
+      - 175
+      - 165
+      bloom_intensity: 0.18
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[horror_pupil_tremble]'
+      - '[monster_roar]'
+      - '[dramatic_turn]'
+      vfx_preset: creeping_shadow_tendrils_light_flicker
+      transition: glitch_cut
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_michael
+        edge_voice: en-US-ChristopherNeural
+        rate: -8%
+        pitch: -4Hz
+      bgm_style: sub-bass ominous drone, dissonant sul ponticello strings, heartbeat
+        pulse
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -24.0
+      ducking_db: -8.0
+      bgm_ducked_lufs: -32.0
+      min_snr_db: 12.0
+      lookahead_ms: 60
+      release_ms: 500
+      sfx_peak_dbfs: -5.0
+  sports:
+    category: core_genre
+    recommended_camera: whip_pan
+    transition_type: whip_pan
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[sports_kinetic_sprint]'
+    - '[impact_recoil]'
+    - '[aura_awakening]'
+    bg_prompt: masterpiece sports anime background, floodlit stadium arena with roaring
+      crowd blur and polished court reflections, Production I.G style
+    bg_negative_prompt: dark horror, static, blurry, watermark, text
+    relighting:
+      color_temperature_kelvin: 5700
+      rim_light_rgb:
+      - 255
+      - 180
+      - 75
+      bloom_intensity: 0.4
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.25
+    audio:
+      kokoro_voice: am_adam
+      edge_voice: en-US-GuyNeural
+      rate: +12%
+      pitch: +3Hz
+      bgm_style: shonen_taiko_heroic
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.5
+      ducking_attenuation_db: -10.5
+      bgm_ducked_lufs: -27.0
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 70
+      exponential_release_ms: 280
+      sfx_peak_dbfs: -6.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - diagonal_action_slash
+    - split_screen_standoff
+    - inset_reaction_overlay
+    upstream_datasets:
+    - sakuga_42m
+    - animerun_atd12k
+    - manga109_suite
+    - popmanga_magi
+    core_themes:
+    - match_point_climax
+    - kinetic_body_mechanics
+    - team_synchronization
+    - Flow_State_Zone
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, packed stadium arena under
+        blazing floodlights, polished court reflections, Production I.G dynamic perspective
+      negative_prompt: gloomy medieval, static blurry, text, watermark
+      depth_parallax_scale: 1.35
+      kelvin: 5700
+      rim_light_rgb:
+      - 255
+      - 200
+      - 70
+      bloom_intensity: 0.4
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[sports_kinetic_sprint]'
+      - '[impact_recoil]'
+      - '[aura_awakening]'
+      vfx_preset: sweat_droplets_speedlines_zone_aura
+      transition: whip_pan
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_adam
+        edge_voice: en-US-GuyNeural
+        rate: +12%
+        pitch: +3Hz
+      bgm_style: high-BPM drumline, funky slap bass, brass fanfare, sneaker squeak
+        & crowd roar
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.5
+      ducking_db: -10.5
+      bgm_ducked_lufs: -27.0
+      min_snr_db: 11.0
+      lookahead_ms: 70
+      release_ms: 280
+      sfx_peak_dbfs: -6.0
+  isekai:
+    category: subgenre
+    recommended_camera: zoom_out
+    transition_type: light_burst_flash
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[aura_awakening]'
+    - '[sword_slash]'
+    - '[cape_wind_standoff]'
+    bg_prompt: masterpiece dark fantasy isekai dungeon throne room with colossal stone
+      statues, glowing blue system runes and violet shadow flames, Solo Leveling anime
+      style
+    bg_negative_prompt: modern office, photorealistic, blurry, text, speech bubble,
+      watermark
+    relighting:
+      color_temperature_kelvin: 6100
+      rim_light_rgb:
+      - 80
+      - 175
+      - 255
+      bloom_intensity: 0.48
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.25
+    audio:
+      kokoro_voice: am_adam
+      edge_voice: en-US-GuyNeural
+      rate: +6%
+      pitch: +0Hz
+      bgm_style: isekai_choir_orchestral
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -17.0
+      ducking_attenuation_db: -10.5
+      bgm_ducked_lufs: -27.5
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 75
+      exponential_release_ms: 340
+      sfx_peak_dbfs: -6.5
+    default_prior_weight: 0.7
+    preferred_layouts:
+    - vertical_webtoon_scroll
+    - full_bleed_splash
+    - inset_reaction_overlay
+    upstream_datasets:
+    - toon2data_webtoon
+    - sakuga_42m
+    - deepghs_anime_bg
+    - mal_comics_narrative
+    core_themes:
+    - status_window_hud
+    - reincarnation_awakening
+    - dungeon_raid_boss
+    - guild_adventurer_world
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, colossal glowing blue dungeon
+        portal gate inside crystal cavern with floating translucent RPG system status
+        windows, A-1 Pictures style
+      negative_prompt: modern mundane classroom, blurry, watermark, raw comic speech
+        bubble
+      depth_parallax_scale: 1.28
+      kelvin: 6200
+      rim_light_rgb:
+      - 65
+      - 210
+      - 255
+      bloom_intensity: 0.5
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[isekai_hud_materialize]'
+      - '[aura_awakening]'
+      - '[sword_slash]'
+      vfx_preset: holographic_status_hud_mana_flames
+      transition: light_burst_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_adam
+        edge_voice: en-US-GuyNeural
+        rate: +6%
+        pitch: +0Hz
+      bgm_style: epic choir + crystalline RPG notification chimes + orchestral percussion
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -17.0
+      ducking_db: -10.5
+      bgm_ducked_lufs: -27.5
+      min_snr_db: 11.0
+      lookahead_ms: 75
+      release_ms: 340
+      sfx_peak_dbfs: -6.5
+  mecha:
+    category: subgenre
+    recommended_camera: whip_pan
+    transition_type: hud_scan_wipe
+    vfx_style: speedlines_sparks_aura
+    motion_primitives:
+    - '[impact_recoil]'
+    - '[aura_awakening]'
+    - '[sword_slash]'
+    bg_prompt: masterpiece mecha anime background, orbital space colony hangar with
+      holographic HUD telemetry and thruster plasma trails, Sunrise studio style
+    bg_negative_prompt: medieval village, blurry, watermark, text
+    relighting:
+      color_temperature_kelvin: 6300
+      rim_light_rgb:
+      - 90
+      - 235
+      - 210
+      bloom_intensity: 0.44
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.2
+    audio:
+      kokoro_voice: am_michael
+      edge_voice: en-US-GuyNeural
+      rate: +8%
+      pitch: -1Hz
+      bgm_style: shonen_taiko_heroic
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.5
+      ducking_attenuation_db: -11.0
+      bgm_ducked_lufs: -27.5
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 70
+      exponential_release_ms: 320
+      sfx_peak_dbfs: -5.5
+    default_prior_weight: 1.0
+    subtypes:
+      real_robot:
+        description: mecha subtype real_robot
+      super_robot:
+        description: mecha subtype super_robot
+    preferred_layouts:
+    - mecha_hud_cockpit_inset
+    - split_screen_standoff
+    - full_bleed_splash
+    upstream_datasets:
+    - sakuga_42m
+    - animerun_atd12k
+    - deepghs_anime_bg
+    - mal_comics_narrative
+    core_themes:
+    - cockpit_neural_sync
+    - itani_circus_missiles
+    - real_robot_tactical
+    - super_robot_combiner
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, orbital space colony hangar
+        and shattered metropolis skyline with anti-aircraft searchlights and vernier
+        thruster plumes, Sunrise studio style
+      negative_prompt: medieval wood, blurry, low detail, text, watermark
+      depth_parallax_scale: 1.35
+      kelvin: 6500
+      rim_light_rgb:
+      - 255
+      - 95
+      - 65
+      bloom_intensity: 0.46
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[mecha_thruster_launch]'
+      - '[impact_recoil]'
+      - '[isekai_hud_materialize]'
+      vfx_preset: vernier_thruster_sparks_hud_telemetry
+      transition: hud_scan_wipe
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: am_michael
+        edge_voice: en-US-GuyNeural
+        rate: +8%
+        pitch: -1Hz
+      bgm_style: industrial synth brass, military snare cadence, hydraulic servo &
+        cockpit warning klaxons
+      dialogue_target_lufs: -14.0
+      bgm_active_lufs: -16.5
+      ducking_db: -11.0
+      bgm_ducked_lufs: -27.5
+      min_snr_db: 11.0
+      lookahead_ms: 70
+      release_ms: 320
+      sfx_peak_dbfs: -5.5
+  mahou_shoujo:
+    category: subgenre
+    recommended_camera: zoom_out
+    transition_type: light_burst_flash
+    vfx_style: sakura_petals_soft_sparkles
+    motion_primitives:
+    - '[aura_awakening]'
+    - '[shojo_sparkle_breeze]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece magical girl anime background, stained-glass astral cathedral
+      with floating ribbons and starlight prisms, Shaft and Kyoto Animation style
+    bg_negative_prompt: gritty military, gore, watermark, text
+    relighting:
+      color_temperature_kelvin: 4900
+      rim_light_rgb:
+      - 255
+      - 165
+      - 240
+      bloom_intensity: 0.54
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.05
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-JennyNeural
+      rate: +4%
+      pitch: +5Hz
+      bgm_style: isekai_choir_orchestral
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -18.5
+      ducking_attenuation_db: -9.5
+      bgm_ducked_lufs: -28.0
+      min_dialogue_to_bgm_snr_db: 11.5
+      lookahead_attack_ms: 80
+      exponential_release_ms: 400
+      sfx_peak_dbfs: -7.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - shojo_open_flower_borderless
+    - full_bleed_splash
+    - diagonal_action_slash
+    upstream_datasets:
+    - sakuga_42m
+    - manga109_suite
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - henshin_transformation
+    - magical_sigil_invocation
+    - hopeful_resolve_vs_despair
+    - ribbon_starlight_combat
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, surreal stained-glass astral
+        sanctuary with floating luminous magic circles, ribbons and starlight prisms,
+        Shaft / Toei animation style
+      negative_prompt: muddy brown, mundane, blurry, text, watermark
+      depth_parallax_scale: 1.2
+      kelvin: 4900
+      rim_light_rgb:
+      - 255
+      - 145
+      - 235
+      bloom_intensity: 0.58
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[mahou_ribbon_transform]'
+      - '[aura_awakening]'
+      - '[shojo_sparkle_breeze]'
+      vfx_preset: magic_circle_ribbons_prism_sparkles
+      transition: light_burst_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-JennyNeural
+        rate: +4%
+        pitch: +5Hz
+      bgm_style: harp glissando, crystalline bell chimes, gothic choir & symphonic
+        strings
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -18.5
+      ducking_db: -9.5
+      bgm_ducked_lufs: -28.0
+      min_snr_db: 11.5
+      lookahead_ms: 80
+      release_ms: 400
+      sfx_peak_dbfs: -7.0
+  idol_music:
+    category: subgenre
+    recommended_camera: zoom_in
+    transition_type: light_burst_flash
+    vfx_style: star_sparkles_bouncy_lines
+    motion_primitives:
+    - '[shojo_sparkle_breeze]'
+    - '[dramatic_turn]'
+    bg_prompt: masterpiece idol anime background, dazzling concert dome stage with
+      laser beams and sea of glowing penlights, CloverWorks style
+    bg_negative_prompt: dark dungeon, horror, watermark, text
+    relighting:
+      color_temperature_kelvin: 5400
+      rim_light_rgb:
+      - 255
+      - 140
+      - 220
+      bloom_intensity: 0.5
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 1.0
+    audio:
+      kokoro_voice: af_sky
+      edge_voice: en-US-AriaNeural
+      rate: +6%
+      pitch: +4Hz
+      bgm_style: kodomomuke_marimba_march
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -15.5
+      ducking_attenuation_db: -11.5
+      bgm_ducked_lufs: -27.0
+      min_dialogue_to_bgm_snr_db: 11.0
+      lookahead_attack_ms: 65
+      exponential_release_ms: 300
+      sfx_peak_dbfs: -6.5
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - full_bleed_splash
+    - inset_reaction_overlay
+    - split_screen_standoff
+    upstream_datasets:
+    - animeshooter
+    - sakuga_42m
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - live_concert_choreography
+    - backstage_ambition
+    - spotlight_solo
+    - crowd_lightsticks
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, dazzling dome concert stage
+        with volumetric laser beams, LED confetti and sea of glowing penlights, Doga
+        Kobo / Oshi no Ko style
+      negative_prompt: dark muddy dungeon, desaturated, blurry, text, watermark
+      depth_parallax_scale: 1.22
+      kelvin: 5200
+      rim_light_rgb:
+      - 255
+      - 105
+      - 220
+      bloom_intensity: 0.6
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[idol_stage_choreo]'
+      - '[shojo_sparkle_breeze]'
+      - '[dramatic_turn]'
+      vfx_preset: stage_lasers_confetti_star_eyes
+      transition: light_burst_flash
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_sky
+        edge_voice: en-US-AriaNeural
+        rate: +6%
+        pitch: +4Hz
+      bgm_style: upbeat J-Pop synth lead, live bass groove, cheering arena ambience
+      dialogue_target_lufs: -14.5
+      bgm_active_lufs: -15.5
+      ducking_db: -11.5
+      bgm_ducked_lufs: -27.0
+      min_snr_db: 11.0
+      lookahead_ms: 65
+      release_ms: 300
+      sfx_peak_dbfs: -6.5
+  harem_reverse_harem:
+    category: subgenre
+    recommended_camera: zoom_in
+    transition_type: petal_dissolve
+    vfx_style: sakura_petals_soft_sparkles
+    motion_primitives:
+    - '[shojo_sparkle_breeze]'
+    - '[intimate_gaze_shift]'
+    bg_prompt: masterpiece anime background, ornate European academy rose garden pavilion
+      with golden sunlight and drifting petals, A-1 Pictures style
+    bg_negative_prompt: dark horror, gore, watermark, text
+    relighting:
+      color_temperature_kelvin: 4500
+      rim_light_rgb:
+      - 255
+      - 210
+      - 195
+      bloom_intensity: 0.48
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 0.85
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-JennyNeural
+      rate: +2%
+      pitch: +2Hz
+      bgm_style: shojo_piano_strings
+      dialogue_target_lufs: -15.5
+      bgm_active_lufs: -21.0
+      ducking_attenuation_db: -8.5
+      bgm_ducked_lufs: -29.5
+      min_dialogue_to_bgm_snr_db: 12.0
+      lookahead_attack_ms: 80
+      exponential_release_ms: 480
+      sfx_peak_dbfs: -10.0
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - split_screen_standoff
+    - shojo_open_flower_borderless
+    - inset_reaction_overlay
+    upstream_datasets:
+    - manga109_suite
+    - animeshooter
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - multi_suitor_ensemble
+    - jealous_cross_glance
+    - lavish_salon_gathering
+    - romantic_rivalry
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, ornate European rose garden
+        conservatory and grand chandelier salon bathed in warm afternoon sunlight,
+        soft floral bloom
+      negative_prompt: dark horror, gritty war, blurry, text, watermark
+      depth_parallax_scale: 0.95
+      kelvin: 4500
+      rim_light_rgb:
+      - 255
+      - 205
+      - 175
+      bloom_intensity: 0.48
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[shojo_sparkle_breeze]'
+      - '[intimate_gaze_shift]'
+      - '[dramatic_turn]'
+      vfx_preset: rose_petals_sparkle_frame
+      transition: petal_dissolve
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-JennyNeural
+        rate: +2%
+        pitch: +2Hz
+      bgm_style: elegant harpsichord waltz, playful strings, sparkling chime accents
+      dialogue_target_lufs: -15.5
+      bgm_active_lufs: -21.0
+      ducking_db: -8.5
+      bgm_ducked_lufs: -29.5
+      min_snr_db: 12.0
+      lookahead_ms: 80
+      release_ms: 480
+      sfx_peak_dbfs: -10.0
+  ecchi:
+    category: subgenre
+    recommended_camera: whip_pan
+    transition_type: whip_pan
+    vfx_style: star_sparkles_bouncy_lines
+    motion_primitives:
+    - '[dramatic_turn]'
+    - '[shojo_sparkle_breeze]'
+    bg_prompt: masterpiece anime background, bright sunlit cosplay studio and rooftop
+      terrace with vibrant summer sky, CloverWorks style
+    bg_negative_prompt: dark horror, gritty, watermark, text
+    relighting:
+      color_temperature_kelvin: 5100
+      rim_light_rgb:
+      - 255
+      - 200
+      - 210
+      bloom_intensity: 0.4
+      edge_light_wrap_px: 3
+    depth_parallax_scale: 0.95
+    audio:
+      kokoro_voice: af_bella
+      edge_voice: en-US-SaraNeural
+      rate: +5%
+      pitch: +4Hz
+      bgm_style: comedy_pizzicato_bounce
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -20.5
+      ducking_attenuation_db: -9.0
+      bgm_ducked_lufs: -29.5
+      min_dialogue_to_bgm_snr_db: 11.5
+      lookahead_attack_ms: 70
+      exponential_release_ms: 320
+      sfx_peak_dbfs: -8.5
+    default_prior_weight: 1.0
+    preferred_layouts:
+    - inset_reaction_overlay
+    - full_bleed_splash
+    - four_koma_gag_strip
+    upstream_datasets:
+    - manga109_suite
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    - mal_comics_narrative
+    core_themes:
+    - flustered_blush_reaction
+    - playful_misunderstanding
+    - comedic_double_take
+    - glamour_lighting
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, sunlit summer beach resort
+        and cosplay studio with warm rim lighting and lens flare bokeh, CloverWorks
+        aesthetic
+      negative_prompt: dark horror, gore, muddy colors, text, watermark
+      depth_parallax_scale: 1.0
+      kelvin: 4700
+      rim_light_rgb:
+      - 255
+      - 190
+      - 200
+      bloom_intensity: 0.5
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[dramatic_turn]'
+      - '[shojo_sparkle_breeze]'
+      - '[intimate_gaze_shift]'
+      vfx_preset: pink_blush_steam_sparkle_flare
+      transition: whip_pan
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_bella
+        edge_voice: en-US-SaraNeural
+        rate: +5%
+        pitch: +4Hz
+      bgm_style: upbeat brassy funk-pop, slap bass, comedic slide whistle & heartbeat
+        stinger
+      dialogue_target_lufs: -15.0
+      bgm_active_lufs: -20.5
+      ducking_db: -9.0
+      bgm_ducked_lufs: -29.5
+      min_snr_db: 11.5
+      lookahead_ms: 70
+      release_ms: 320
+      sfx_peak_dbfs: -8.5
+  yaoi_yuri:
+    category: subgenre
+    recommended_camera: zoom_in
+    transition_type: dreamy_dissolve
+    vfx_style: sakura_petals_soft_sparkles
+    motion_primitives:
+    - '[intimate_gaze_shift]'
+    - '[shojo_sparkle_breeze]'
+    bg_prompt: masterpiece anime background, quiet music room at sunset with golden
+      light streaming across grand piano and sheer curtains, Kyoto Animation style
+    bg_negative_prompt: chibi, monster, gore, watermark, text
+    relighting:
+      color_temperature_kelvin: 4200
+      rim_light_rgb:
+      - 255
+      - 195
+      - 175
+      bloom_intensity: 0.5
+      edge_light_wrap_px: 4
+    depth_parallax_scale: 0.8
+    audio:
+      kokoro_voice: af_sarah
+      edge_voice: en-US-AriaNeural
+      rate: -4%
+      pitch: +0Hz
+      bgm_style: josei_jazz_rain_piano
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.5
+      ducking_attenuation_db: -8.0
+      bgm_ducked_lufs: -30.5
+      min_dialogue_to_bgm_snr_db: 12.5
+      lookahead_attack_ms: 90
+      exponential_release_ms: 620
+      sfx_peak_dbfs: -12.5
+    default_prior_weight: 1.0
+    subtypes:
+      yaoi_bl:
+        description: yaoi_yuri subtype yaoi_bl
+      yuri_gl:
+        description: yaoi_yuri subtype yuri_gl
+    preferred_layouts:
+    - intimate_two_shot_close
+    - shojo_open_flower_borderless
+    - inset_reaction_overlay
+    upstream_datasets:
+    - manga109_suite
+    - animeshooter
+    - deepghs_anime_bg
+    - zarxrax_anime_seg
+    core_themes:
+    - tender_eye_contact
+    - hand_brush_hesitation
+    - rooftop_confession
+    - emotional_vulnerability
+    stage_3d:
+      illustrious_bg_prompt: masterpiece anime background, quiet railway crossing
+        at dusk and empty school music room bathed in warm amber sunset rays, soft
+        halation and shallow bokeh
+      negative_prompt: harsh gore, mecha war, blurry, text, watermark
+      depth_parallax_scale: 0.82
+      kelvin: 4150
+      rim_light_rgb:
+      - 255
+      - 185
+      - 155
+      bloom_intensity: 0.54
+    motion_lora:
+      trigger_token: m2a_anime_motion
+      motion_primitives:
+      - '[intimate_gaze_shift]'
+      - '[shojo_sparkle_breeze]'
+      - '[cape_wind_standoff]'
+      vfx_preset: warm_light_leak_floating_petals
+      transition: dreamy_dissolve
+    audio_lufs:
+      voice_profile:
+        kokoro_voice: af_sarah
+        edge_voice: en-US-AriaNeural
+        rate: -4%
+        pitch: +0Hz
+      bgm_style: intimate acoustic fingerstyle guitar, expressive solo cello, gentle
+        evening breeze
+      dialogue_target_lufs: -16.0
+      bgm_active_lufs: -22.5
+      ducking_db: -8.0
+      bgm_ducked_lufs: -30.5
+      min_snr_db: 12.5
+      lookahead_ms: 90
+      release_ms: 620
+      sfx_peak_dbfs: -12.5
+panel_layout_topologies:
+  vertical_webtoon_scroll:
+    gutter_style: vertical_infinite_canvas
+    aspect_ratio_range:
+    - 0.45
+    - 0.65
+    recommended_camera: pan_down
+  diagonal_action_slash:
+    gutter_style: slanted_kinetic_gutter
+    aspect_ratio_range:
+    - 1.1
+    - 1.3
+    recommended_camera: whip_pan
+  full_bleed_splash:
+    gutter_style: full_bleed_edge
+    aspect_ratio_range:
+    - 0.55
+    - 0.75
+    recommended_camera: zoom_out
+  inset_reaction_overlay:
+    gutter_style: overlapping_inset_frame
+    aspect_ratio_range:
+    - 1.05
+    - 1.25
+    recommended_camera: zoom_in
+  split_screen_standoff:
+    gutter_style: parallel_dual_gutter
+    aspect_ratio_range:
+    - 1.55
+    - 1.75
+    recommended_camera: pan_right
+  shojo_open_flower_borderless:
+    gutter_style: borderless_emotional_flow
+    aspect_ratio_range:
+    - 0.72
+    - 0.92
+    recommended_camera: zoom_in
+  claustrophobic_horror_grid:
+    gutter_style: heavy_black_gutter
+    aspect_ratio_range:
+    - 0.95
+    - 1.15
+    recommended_camera: zoom_in
+  four_koma_gag_strip:
+    gutter_style: uniform_4koma_stack
+    aspect_ratio_range:
+    - 1.3
+    - 1.5
+    recommended_camera: pan_right
+  mecha_hud_cockpit_inset:
+    gutter_style: hex_tactical_overlay
+    aspect_ratio_range:
+    - 1.1
+    - 1.3
+    recommended_camera: zoom_out
+  intimate_two_shot_close:
+    gutter_style: soft_vignette_gutter
+    aspect_ratio_range:
+    - 0.9
+    - 1.1
+    recommended_camera: zoom_in
+storytelling_arc_modes:
+  complete_4_act_arc:
+    requires_fallback: false
+    missing_beats: []
+    weaver_strategy: ''
+  incomplete_missing_setup:
+    requires_fallback: true
+    missing_beats:
+    - setup
+    weaver_strategy: Synthesize prologue establishing hook + character introduction
+      bridge panel
+  incomplete_missing_climax:
+    requires_fallback: true
+    missing_beats:
+    - climax
+    - resolution
+    weaver_strategy: Synthesize high-intensity climax bridge panel (Illustrious-XL
+      + IP-Adapter) + resolution outro
+  incomplete_cliffhanger_ending:
+    requires_fallback: true
+    missing_beats:
+    - resolution
+    weaver_strategy: Synthesize dramatic cliffhanger monologue + lingering atmospheric
+      outro frame
+  fragmented_mid_battle:
+    requires_fallback: true
+    missing_beats:
+    - setup
+    - resolution
+    weaver_strategy: Wrap raw combat panels with tactical opening narration and aftermath
+      impact reveal
+  in_medias_res_opening:
+    requires_fallback: false
+    missing_beats: []
+    weaver_strategy: ''
+  flashback_memory_montage:
+    requires_fallback: false
+    missing_beats: []
+    weaver_strategy: ''
+  parallel_cross_cut:
+    requires_fallback: false
+    missing_beats: []
+    weaver_strategy: ''
+verified_upstream_sources:
+  manga109_suite:
+    name: Manga109 + Manga109Dialog + COO (Comic Onomatopoeia)
+    source_type: academic_benchmark
+    url: http://www.manga109.org/
+    paper: Multimedia Tools and Applications (2017) / IEEE Access (2020) / arXiv:2312.16954
+    modalities:
+    - panels
+    - speech_bubbles
+    - sfx_polygons
+    - character_faces_bodies
+    - speaker_attribution
+    - demographics_shonen_shojo_seinen_josei
+  popmanga_magi:
+    name: PopManga (Magi / Magiv2 Benchmark)
+    source_type: academic_cvpr2024
+    url: https://github.com/ragavsachdeva/magi
+    paper: CVPR 2024 (The Manga Whisperer)
+    modalities:
+    - english_comics_panels
+    - character_reid_clusters
+    - speaker_to_text_linking
+    - ocr_transcriptions
+  toon2data_webtoon:
+    name: Toon2Data + ogkalu/comic-speech-bubble-detector-yolov8m
+    source_type: github_huggingface
+    url: https://github.com/Snowad14/Toon2Data
+    hf_id: ogkalu/comic-speech-bubble-detector-yolov8m
+    modalities:
+    - vertical_webtoon_panels
+    - speech_bubble_masks
+    - clean_plate_inpainting
+  sakuga_42m:
+    name: Sakuga-42M + DSULT-Core/i-love-anime-sakuga
+    source_type: academic_huggingface
+    url: https://github.com/KytraScript/SakugaDataset
+    hf_id: DSULT-Core/i-love-anime-sakuga
+    paper: arXiv:2405.07425
+    modalities:
+    - 2d_anime_action_video_clips
+    - sakuga_motion_primitives
+    - video_text_captions
+  animeshooter:
+    name: AnimeShooter Multi-Shot Reference-Guided Dataset
+    source_type: academic_huggingface
+    url: https://github.com/qiulu66/Anime-Shooter
+    hf_id: qiulu66/AnimeShooter
+    modalities:
+    - multi_shot_story_arcs
+    - character_reference_crops
+    - paired_audio_tracks
+  animerun_atd12k:
+    name: AnimeRun (NeurIPS 2022) + ATD-12K (CVPR 2021)
+    source_type: academic_benchmark
+    url: https://github.com/siyao72/AnimeRun
+    paper: NeurIPS 2022 / CVPR 2021
+    modalities:
+    - 2d_contour_line_art
+    - ground_truth_optical_flow
+    - occlusion_masks
+    - frame_triplets
+  zarxrax_anime_seg:
+    name: Zarxrax/anime_image_segmentation + skytnt/anime-segmentation
+    source_type: huggingface_dataset
+    hf_id: Zarxrax/anime_image_segmentation
+    model_hf_id: ZhengPeng7/BiRefNet_anime
+    modalities:
+    - rgba_character_cutouts
+    - clean_background_layers
+    - alpha_matting_masks
+  deepghs_anime_bg:
+    name: deepghs/anime-bg + RicemanT/Anime-Background-Finetuning-Unprocessed
+    source_type: huggingface_dataset
+    hf_id: deepghs/anime-bg
+    secondary_hf_id: RicemanT/Anime-Background-Finetuning-Unprocessed
+    modalities:
+    - 2d_anime_scenery_plates
+    - lighting_time_of_day_tags
+    - illustrious_xl_bg_lora
+  mal_comics_narrative:
+    name: fadhilakbar/anime-title-metadata-index + COMICS (Iyyer et al., CVPR 2017)
+    source_type: huggingface_academic
+    hf_id: fadhilakbar/anime-title-metadata-index
+    url: https://github.com/miyyer/comics
+    modalities:
+    - 18_genre_multi_label_taxonomy
+    - inter_panel_narrative_closure
+    - story_arc_synopses

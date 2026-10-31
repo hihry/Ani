@@ -87,10 +87,23 @@ def detect_speech_bubbles_and_text(
     panel_area = float(w * eff_h)
 
     if cv2 is not None:
-        # Close interior text stroke holes so each speech bubble forms a single solid component
-        close_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 7))
-        closed = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, close_kernel)
-        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Bridge only small pointer-tail triangles (ew < 48 or eh < 48) across 3px bubble outlines
+        # so large adjacent webtoon gutters are never fused into speech bubbles.
+        raw_cnts, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        bridged_white = white_mask.copy()
+        tail_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 7))
+        for rcnt in raw_cnts:
+            rx, ry, rw, rh = cv2.boundingRect(rcnt)
+            if (rw < 48 or rh < 48) and (rw >= 6 and rh >= 6) and (rw * rh <= 1800):
+                tx1 = max(0, rx - 6)
+                ty1 = max(0, ry - 6)
+                tx2 = min(w, rx + rw + 6)
+                ty2 = min(eff_h, ry + rh + 6)
+                bridged_white[ty1:ty2, tx1:tx2] = cv2.morphologyEx(
+                    bridged_white[ty1:ty2, tx1:tx2], cv2.MORPH_CLOSE, tail_kernel
+                )
+
+        contours, _ = cv2.findContours(bridged_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for cnt in contours:
             ex, ey, ew, eh = cv2.boundingRect(cnt)

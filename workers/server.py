@@ -389,6 +389,37 @@ class HealthResponse(BaseModel):
     gpu_available: bool = False
 
 
+def _check_workflow_weights(workflow_path: Path, object_info: Dict[str, Any]) -> Optional[str]:
+    if not workflow_path.is_file():
+        return f"missing workflow: {workflow_path.name}"
+    try:
+        wf = json.loads(workflow_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return f"invalid workflow: {exc}"
+    for node in wf.values():
+        if not isinstance(node, dict):
+            continue
+        ctype = str(node.get("class_type") or "")
+        if ctype not in ("UNETLoader", "UnetLoaderGGUF", "CheckpointLoaderSimple"):
+            continue
+        node_meta = object_info.get(ctype)
+        if not isinstance(node_meta, dict) or "input" not in node_meta:
+            continue
+        req_inputs = node_meta.get("input", {}).get("required", {})
+        if not isinstance(req_inputs, dict):
+            continue
+        inputs = node.get("inputs", {})
+        for param in ("unet_name", "ckpt_name"):
+            if param in inputs and param in req_inputs:
+                spec_entry = req_inputs[param]
+                if isinstance(spec_entry, list) and spec_entry and isinstance(spec_entry[0], list):
+                    choices = spec_entry[0]
+                    target_weight = str(inputs[param])
+                    if target_weight not in choices:
+                        return f"missing weight: {target_weight}"
+    return None
+
+
 def _probe_video_providers() -> Dict[str, str]:
     specs = load_model_specs()
     comfy_url = os.environ.get("M2A_COMFY_URL", "").strip()
@@ -407,15 +438,31 @@ def _probe_video_providers() -> Dict[str, str]:
             return providers
 
     client = ComfyClient(base_url=comfy_url)
+    try:
+        base_probe = client.probe(required_nodes=[])
+        avail_nodes = set(base_probe.get("available_nodes") or [])
+        obj_resp = client._request("GET", "/object_info", timeout=5.0)
+        object_info = obj_resp.json() if obj_resp.status_code == 200 else {}
+    except Exception as exc:
+        for mid, spec in specs.items():
+            providers[mid] = "disabled" if not spec.enabled else f"unavailable: {exc}"
+        return providers
+
+    repo_root = Path(__file__).resolve().parents[1]
     for mid, spec in specs.items():
         if not spec.enabled:
             providers[mid] = "disabled"
             continue
-        try:
-            client.probe(required_nodes=spec.required_nodes)
+        missing_nodes = [n for n in spec.required_nodes if n not in avail_nodes]
+        if missing_nodes:
+            providers[mid] = f"unavailable: missing nodes {missing_nodes}"
+            continue
+        wf_path = spec.workflow if spec.workflow.is_absolute() else (repo_root / spec.workflow)
+        weight_err = _check_workflow_weights(wf_path, object_info)
+        if weight_err:
+            providers[mid] = f"unavailable: {weight_err}"
+        else:
             providers[mid] = "ready"
-        except Exception as exc:
-            providers[mid] = f"unavailable: {exc}"
     return providers
 
 

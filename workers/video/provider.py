@@ -156,8 +156,9 @@ class ComfyVideoProvider:
 
         pos_prompt, neg_prompt = build_prompt(panel, understanding_panel, self.spec)
         from PIL import Image
-        src_img = Image.open(clean_plate).convert("RGB")
-        native_w, native_h = pick_bucket(src_img.width, src_img.height, self.spec.resolution_buckets)
+        from workers.render_kenburns import _trim_outer_white_gutters
+        src_trimmed = _trim_outer_white_gutters(Image.open(clean_plate).convert("RGB"))
+        native_w, native_h = pick_bucket(src_trimmed.width, src_trimmed.height, self.spec.resolution_buckets)
         native_frames = frames_for(duration_s, self.spec)
 
         prepared_input = prepare_input(
